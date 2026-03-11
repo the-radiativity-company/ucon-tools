@@ -1510,6 +1510,107 @@ def _get_dimension_vector(unit) -> str:
     return "·".join(components) if components else "1"
 
 
+def _normalize_dimension_vector(vector_str: str) -> str:
+    """Normalize a dimension vector string to canonical KOQ order.
+
+    Takes a vector like "M·L²·T⁻²·N⁻¹·Θ⁻¹" and returns it in canonical order
+    "M·L²·T⁻²·Θ⁻¹·N⁻¹" (M, L, T, I, Θ, N, J).
+
+    This ensures consistent comparison regardless of input order.
+    """
+    import re
+
+    # KOQ canonical order
+    koq_order = ["M", "L", "T", "I", "Θ", "N", "J"]
+
+    # Parse each component from the vector string
+    # Components are separated by · and may have exponents like ², ³, ⁻¹, ⁻², ^-1, etc.
+    exponents: dict[str, int] = {}
+
+    # Split by · (middle dot)
+    parts = vector_str.split("·")
+
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+
+        # Match symbol and optional exponent
+        # Symbols: M, L, T, I, Θ, N, J
+        # Exponents: ², ³, ⁻¹, ⁻², ⁻³, ^N, or none (implies 1)
+        match = re.match(r'^([MLTIΘNJ])(.*)$', part)
+        if not match:
+            # Try alternative theta representations
+            match = re.match(r'^(Theta|θ)(.*)$', part, re.IGNORECASE)
+            if match:
+                symbol = "Θ"
+                exp_str = match.group(2)
+            else:
+                continue  # Unknown symbol, skip
+        else:
+            symbol = match.group(1)
+            exp_str = match.group(2)
+
+        # Parse exponent
+        if not exp_str:
+            exp = 1
+        elif exp_str == "²":
+            exp = 2
+        elif exp_str == "³":
+            exp = 3
+        elif exp_str == "⁻¹":
+            exp = -1
+        elif exp_str == "⁻²":
+            exp = -2
+        elif exp_str == "⁻³":
+            exp = -3
+        elif exp_str.startswith("^"):
+            try:
+                exp = int(exp_str[1:])
+            except ValueError:
+                exp = 1
+        else:
+            # Try to parse superscript numbers
+            superscript_map = {"⁰": 0, "¹": 1, "²": 2, "³": 3, "⁴": 4, "⁵": 5,
+                              "⁶": 6, "⁷": 7, "⁸": 8, "⁹": 9, "⁻": "-"}
+            exp_digits = ""
+            for c in exp_str:
+                if c in superscript_map:
+                    exp_digits += str(superscript_map[c])
+            if exp_digits:
+                try:
+                    exp = int(exp_digits)
+                except ValueError:
+                    exp = 1
+            else:
+                exp = 1
+
+        exponents[symbol] = exponents.get(symbol, 0) + exp
+
+    # Rebuild in canonical order
+    components = []
+    for symbol in koq_order:
+        exp = exponents.get(symbol, 0)
+        if exp == 0:
+            continue
+        elif exp == 1:
+            components.append(symbol)
+        elif exp == 2:
+            components.append(f"{symbol}²")
+        elif exp == 3:
+            components.append(f"{symbol}³")
+        elif exp == -1:
+            components.append(f"{symbol}⁻¹")
+        elif exp == -2:
+            components.append(f"{symbol}⁻²")
+        elif exp == -3:
+            components.append(f"{symbol}⁻³")
+        else:
+            components.append(f"{symbol}^{exp}")
+
+    return "·".join(components) if components else "1"
+
+
 def _parse_dimension_to_vector(dimension_str: str) -> str | None:
     """Parse a dimension string to a vector signature.
 
@@ -1517,11 +1618,11 @@ def _parse_dimension_to_vector(dimension_str: str) -> str | None:
     - Human-readable: "energy/amount_of_substance", "energy/temperature"
     - Vector notation: "M·L²·T⁻²·N⁻¹"
 
-    Returns the vector signature or None if parsing fails.
+    Returns the vector signature in canonical order, or None if parsing fails.
     """
-    # If it's already in vector notation, return as-is
+    # If it's already in vector notation, normalize to canonical order
     if any(c in dimension_str for c in ["·", "²", "³", "⁻"]):
-        return dimension_str
+        return _normalize_dimension_vector(dimension_str)
 
     # Try to parse as human-readable dimension
     # Common patterns: "X", "X/Y", "X/Y/Z", "X*Y/Z"
