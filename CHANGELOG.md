@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-25
+
+### Added
+
+- Affine conversion support in `define_conversion` tool
+  - `offset` parameter for affine conversions (e.g., temperature scales)
+  - Conversion formula: `dst = factor * src + offset`
+  - `offset` field added to `ConversionDefinitionResult`
+  - Inline `custom_edges` also support `offset`
+  - Backward compatible: `offset` defaults to `0.0` (linear behavior)
+
+### Changed
+
+- Minimum `ucon` dependency bumped from `>=0.9.3` to `>=0.10.1` (requires `EdgeDef.offset`)
+- Test imports migrated from `ucon.mcp` to `ucon.tools.mcp` (aligns with ucon 0.10.x namespace)
+
 ## [0.2.0] - 2026-03-11
 
 ### Added
@@ -57,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Install via `pip install ucon-tools[mcp]`
 
 <!-- Links -->
-[Unreleased]: https://github.com/withtwoemms/ucon-tools/compare/0.2.0...HEAD
+[Unreleased]: https://github.com/withtwoemms/ucon-tools/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/withtwoemms/ucon-tools/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/withtwoemms/ucon-tools/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/withtwoemms/ucon-tools/releases/tag/0.1.0
