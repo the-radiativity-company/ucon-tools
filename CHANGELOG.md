@@ -9,15 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `decompose` MCP tool for parsing natural language quantity expressions
-- `solve` MCP tool for solving unit conversion problems with step-by-step reasoning
-- NER module for quantity extraction from natural language (`ucon.tools.mcp.ner`)
-  - `TrainingDataset` and `TrainingExample` for managing training data
-  - `EntityLabel` and `NERConfig` for model configuration
-  - `evaluate` and `evaluate_model` for model evaluation
-  - `normalize_unit_string` for natural language unit normalization (e.g., "mg per dose" → "mg/ea")
-  - `ComponentNormalizer` for learned component mappings
-- Eval scripts and Makefile targets (`eval-decompose-live`, `eval-nl-problems`, `eval-ollama`)
+- `decompose` MCP tool for deterministic unit conversion path construction
+  - Query mode: simple "X to Y" conversions (e.g., "500 mL to L")
+  - Structured mode: multi-step dimensional analysis with known quantities
+  - Returns factor chains consumable by `compute`
+- `expected_unit` parameter on `compute` tool for result validation
+- Dimension mismatch diagnostics with corrective hints
+- Eval script and Makefile target (`eval-decompose-live`)
 
 ## [0.2.1] - 2026-03-25
 
