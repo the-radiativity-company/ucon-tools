@@ -38,11 +38,15 @@ help:
 	@echo "  ${CYAN}mcp-server-stop${RESET}   - Stop background MCP server"
 	@echo "  ${CYAN}mcp-server-status${RESET} - Check if MCP server is running"
 	@echo ""
+	@echo "${YELLOW}Eval Commands:${RESET}\n"
+	@echo "  ${CYAN}eval-decompose-live${RESET}  - Run decompose eval against live MCP server"
+	@echo ""
 	@echo "${YELLOW}Variables:${RESET}\n"
 	@echo "  PYTHON=${PYTHON}		- Python version for test target"
 	@echo "  UV_VENV=${UV_VENV}	- Path to virtual environment"
 	@echo "  TESTNAME=		- Specific test to run (e.g., tests.ucon.test_core)"
 	@echo "  COVERAGE=${COVERAGE}		- Enable coverage (true/false)"
+	@echo "  SSE_URL=		- SSE server URL for eval-decompose-live"
 	@echo ""
 
 # --- uv Installation ---
@@ -187,3 +191,16 @@ clean:
 clean-all: clean
 	@echo "${YELLOW}Removing uv.lock...${RESET}"
 	@rm -f uv.lock
+
+# --- Evals ---
+.PHONY: eval-decompose-live
+eval-decompose-live: ${DEPS_INSTALLED}
+	@echo "${GREEN}Running decompose eval against live MCP server...${RESET}"
+ifdef SSE_URL
+	@UV_PROJECT_ENVIRONMENT=${UV_VENV} uv run --python ${PYTHON} \
+		python scripts/eval_decompose_live.py --sse ${SSE_URL}
+else
+	@UV_PROJECT_ENVIRONMENT=${UV_VENV} uv run --python ${PYTHON} \
+		python scripts/eval_decompose_live.py
+endif
+
