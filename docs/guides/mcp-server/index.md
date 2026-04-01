@@ -65,6 +65,31 @@ Supports:
 - Composite units: `m/s`, `kg*m/s^2`, `N*m`
 - Exponents: `m^2`, `s^-1` (ASCII) or `m²`, `s⁻¹` (Unicode)
 
+### `decompose`
+
+Build a factor chain for `compute()` by analyzing dimensional requirements.
+
+**Query mode** — simple conversions:
+
+```python
+decompose(query="500 mL to L")
+# → {"initial_value": 500, "initial_unit": "mL", "target_unit": "L", "factors": [...]}
+```
+
+**Structured mode** — multi-step problems with known quantities:
+
+```python
+decompose(
+    initial_unit="mcg/(kg*min)",
+    target_unit="mg/h",
+    known_quantities=[{"value": 70, "unit": "kg"}]
+)
+# → {"factors": [{"value": 70, "numerator": "kg", ...}, ...]}
+# Pass the result's factors directly to compute()
+```
+
+The tool performs dimensional gap analysis, places known quantities in the correct position (numerator or denominator), and adds conversion factors for remaining unit mismatches.
+
 ### `compute`
 
 Perform multi-step factor-label calculations with dimensional tracking.

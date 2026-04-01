@@ -66,6 +66,103 @@ convert(
 
 ---
 
+## decompose
+
+Build a factor chain for `compute()` by analyzing dimensional requirements.
+
+Operates in two modes: **query mode** for simple conversions, and **structured mode** for multi-step problems where known quantities bridge dimensional gaps.
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `query` | string | No | Simple conversion query (e.g., `"500 mL to L"`, `"50 psi to kPa"`) |
+| `initial_unit` | string | No | Starting unit string (use with `target_unit`) |
+| `target_unit` | string | No | Target unit string (use with `initial_unit`) |
+| `known_quantities` | list[dict] | No | Quantities to incorporate into the factor chain |
+
+Must provide either `query` **or** both `initial_unit` and `target_unit`.
+
+**Known quantity dict schema:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `value` | float | Numeric value (e.g., 70) |
+| `unit` | string | Unit string (e.g., `"kg"`) |
+
+### Response Schema
+
+**Success: `DecomposeResult`**
+
+```json
+{
+  "initial_value": 500,
+  "initial_unit": "mL",
+  "target_unit": "L",
+  "factors": [
+    {"value": 0.001, "numerator": "L", "denominator": "mL"}
+  ]
+}
+```
+
+`initial_value` is extracted from the query string (if present) or `null` for structured mode. The `factors` list can be passed directly to `compute()`.
+
+**Error: `ConversionError`**
+
+```json
+{
+  "error": "Cannot bridge dimensional gap from 'mcg/(kg*min)' to 'mg/h'",
+  "error_type": "dimension_mismatch",
+  "parameter": "known_quantities",
+  "hints": [
+    "Need to add 'mass' (exponent 1) - provide a quantity with this dimension",
+    "Add more known_quantities to bridge the gap"
+  ]
+}
+```
+
+### Examples
+
+```python
+# Query mode: simple conversion
+decompose(query="500 mL to L")
+# → {"initial_value": 500, "initial_unit": "mL", "target_unit": "L", "factors": [...]}
+
+# Query mode: composite units
+decompose(query="60 mph to km/h")
+# → {"initial_value": 60, "initial_unit": "mph", "target_unit": "km/h", "factors": [...]}
+
+# Structured mode: weight-based dosing
+# Problem: "5 mcg/kg/min for a 70 kg patient. Rate in mg/h?"
+decompose(
+    initial_unit="mcg/(kg*min)",
+    target_unit="mg/h",
+    known_quantities=[{"value": 70, "unit": "kg"}]
+)
+# → factors for kg cancellation, min→h, mcg→mg
+
+# Structured mode: IV drip rate
+# Problem: "1000 mL over 8 hours, 15 gtt/mL tubing. Rate in gtt/min?"
+decompose(
+    initial_unit="mL",
+    target_unit="gtt/min",
+    known_quantities=[
+        {"value": 8, "unit": "h"},
+        {"value": 15, "unit": "gtt/mL"}
+    ]
+)
+
+# Chain with compute:
+result = decompose(query="3 TB to GiB")
+compute(
+    initial_value=result.initial_value,
+    initial_unit=result.initial_unit,
+    factors=result.factors
+)
+```
+
+---
+
 ## compute
 
 Perform multi-step factor-label calculations with dimensional tracking.
