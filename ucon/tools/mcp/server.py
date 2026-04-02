@@ -1873,8 +1873,9 @@ def _decompose_structured_mode(
     This mode:
     1. Parses initial and target units
     2. Computes the dimensional gap
-    3. Places known quantities to bridge the gap
-    4. Adds conversion factors for remaining unit mismatches
+    3. Parses all known quantities upfront
+    4. Uses a constraint solver to determine optimal placement
+    5. Adds bridging factors for unit-level mismatches (e.g., mcg→mg, min→h)
     """
     with using_graph(graph):
         # Parse initial unit
@@ -1893,10 +1894,10 @@ def _decompose_structured_mode(
     # Compute dimensional gap
     gap = _compute_dimension_gap(initial_dim, target_dim)
 
-    factors = []
-    remaining_gap = dict(gap)
+    # --- Phase 1: Parse all quantities upfront ---
+    parsed_quantities = []  # list of (index, value, unit_str, parsed_unit, exponents)
+    bare_count_indices = []  # indices of bare COUNT (pseudo-dimensional) quantities
 
-    # Parse and place known quantities
     for i, qty in enumerate(known_quantities):
         if "value" not in qty:
             return ConversionError(
@@ -1917,90 +1918,64 @@ def _decompose_structured_mode(
         qty_dim = qty_unit.dimension
         qty_exp = _get_dimension_exponents(qty_dim)
 
-        # Determine placement: does this quantity help close the gap?
-        # Check if adding it (numerator) or dividing by it (denominator) helps
-        placement = _determine_quantity_placement(qty_exp, remaining_gap)
+        # Detect bare COUNT quantities (pseudo-dimension, empty exponents)
+        is_bare_count = (
+            not qty_exp
+            and getattr(qty_dim, 'is_pseudo', False)
+            and getattr(qty_dim, 'tag', None) == "count"
+        )
 
-        if placement == "numerator":
-            # Quantity goes in numerator: multiply by it
-            factors.append({
-                "value": value,
-                "numerator": unit_str,
-                "denominator": "ea",
-            })
-            # Update remaining gap (adding this dimension)
-            for base, exp in qty_exp.items():
-                remaining_gap[base] = remaining_gap.get(base, 0) - exp
-                if abs(remaining_gap[base]) < 1e-12:
-                    del remaining_gap[base]
+        if is_bare_count:
+            bare_count_indices.append(i)
 
-        elif placement == "denominator":
-            # Quantity goes in denominator: divide by it
-            factors.append({
-                "value": 1,
-                "numerator": "ea",
-                "denominator": f"{value} {unit_str}",
-            })
-            # Update remaining gap (subtracting this dimension)
-            for base, exp in qty_exp.items():
-                remaining_gap[base] = remaining_gap.get(base, 0) + exp
-                if abs(remaining_gap[base]) < 1e-12:
-                    del remaining_gap[base]
+        parsed_quantities.append((i, value, unit_str, qty_unit, qty_exp))
 
-        else:
-            # Quantity doesn't help with dimensional gap - still include it
-            # but warn that it may not be correctly placed
-            factors.append({
-                "value": value,
-                "numerator": unit_str,
-                "denominator": "ea",
-            })
+    # --- Phase 2: Constraint solver for dimensional quantities ---
+    # Separate dimensional quantities (non-empty exponents) from bare-count
+    dimensional_qtys = [(i, v, u, pu, e) for i, v, u, pu, e in parsed_quantities if e]
+    dimensional_exps = [e for _, _, _, _, e in dimensional_qtys]
 
-    # After placing known quantities, check if we need unit conversions
-    # for same-dimension different-unit cases
-    # This handles cases like mcg→mg, min→h within the factor chain
+    # Build initial unit's factor map for solver tiebreaker:
+    # Maps unit name → exponent in initial unit (e.g., {"kilogram": -1, "gram": 1}).
+    initial_factors: dict[str, float] = {}
+    if isinstance(initial_parsed, UnitProduct):
+        for uf, exp in initial_parsed.factors.items():
+            initial_factors[uf.unit.name] = exp
+    elif isinstance(initial_parsed, Unit):
+        initial_factors[initial_parsed.name] = 1.0
 
-    # Build the current accumulated unit product
-    accum: dict[tuple, tuple] = {}
-    _accumulate_factors(accum, initial_parsed, +1.0)
+    # Collect parsed unit objects for literal matching
+    dimensional_units = [pu for _, _, _, pu, _ in dimensional_qtys]
 
-    for factor in factors:
-        num_str = factor["numerator"]
-        denom_str = factor["denominator"]
+    signs = _solve_quantity_placements(
+        dimensional_exps, gap,
+        initial_factors=initial_factors,
+        qty_units=dimensional_units,
+    )
 
-        # Parse numerator
-        if num_str != "ea":
-            with using_graph(graph):
-                num_unit, _ = resolve_unit(num_str, parameter="numerator")
-                if num_unit:
-                    _accumulate_factors(accum, num_unit, +1.0)
-
-        # Parse denominator (may have value prefix)
-        if denom_str != "ea":
-            denom_parts = denom_str.strip().split(None, 1)
-            if len(denom_parts) == 2 and denom_parts[0].replace('.', '').isdigit():
-                denom_unit_str = denom_parts[1]
-            else:
-                denom_unit_str = denom_str
-
-            with using_graph(graph):
-                denom_unit, _ = resolve_unit(denom_unit_str, parameter="denominator")
-                if denom_unit:
-                    _accumulate_factors(accum, denom_unit, -1.0)
-
-    current_product = _build_product_from_accum(accum)
-    current_dim = current_product.dimension if current_product else Dimension.dimensionless
-
-    # Add conversion factors to reach target dimension's units
-    if current_dim == target_dim:
-        # Same dimension - may need scale conversions
-        conv_factor = _build_scale_conversion_factor(graph, current_product, target_parsed)
-        if conv_factor:
-            factors.append(conv_factor)
-    elif remaining_gap:
-        # Still have dimensional gap - provide diagnostic
+    if signs is None:
+        # Solver found no valid assignment — build diagnostic
         hints = []
-        for base, exp in remaining_gap.items():
+
+        # Bare-count diagnostic: suggest rate form if time gap exists
+        if bare_count_indices and gap:
+            gap_dims = set(gap.keys())
+            for idx in bare_count_indices:
+                qty = known_quantities[idx]
+                val = qty["value"]
+                unit_str = qty.get("unit", "ea")
+                time_units = []
+                if "time" in gap_dims:
+                    time_units = ["d", "h", "min", "s"]
+                if time_units:
+                    rate_examples = ", ".join(f"'{val} {unit_str}/{t}'" for t in time_units[:3])
+                    hints.append(
+                        f"known_quantities[{idx}] has unit '{unit_str}' (dimensionless count). "
+                        f"If it represents a rate (e.g., doses per day), express as a rate: "
+                        f"{rate_examples}"
+                    )
+
+        for base, exp in gap.items():
             if exp > 0:
                 hints.append(f"Need to add '{base}' (exponent {exp}) - provide a quantity with this dimension")
             else:
@@ -2012,9 +1987,42 @@ def _decompose_structured_mode(
             parameter="known_quantities",
             hints=hints + [
                 "Add more known_quantities to bridge the gap",
-                f"Current gap: {remaining_gap}",
+                f"Current gap: {gap}",
             ],
         )
+
+    # --- Phase 3: Build factor dicts from sign assignments ---
+    factors = []
+
+    for j, (i, value, unit_str, qty_unit, qty_exp) in enumerate(dimensional_qtys):
+        sign = signs[j]
+        if sign == +1:
+            # Numerator: multiply by quantity
+            factors.append({
+                "value": value,
+                "numerator": unit_str,
+                "denominator": "ea",
+            })
+        else:
+            # Denominator: divide by quantity
+            factors.append({
+                "value": 1,
+                "numerator": "ea",
+                "denominator": f"{value} {unit_str}",
+            })
+
+    # Include bare-count quantities in numerator as-is
+    for i, value, unit_str, qty_unit, qty_exp in parsed_quantities:
+        if i in bare_count_indices:
+            factors.append({
+                "value": value,
+                "numerator": unit_str,
+                "denominator": "ea",
+            })
+
+    # --- Phase 4: Auto-bridge unit-level mismatches ---
+    bridging = _compute_bridging_factors(graph, initial_parsed, factors, target_parsed)
+    factors.extend(bridging)
 
     return DecomposeResult(
         initial_value=None,  # Value comes from the problem, not decompose
@@ -2061,6 +2069,306 @@ def _determine_quantity_placement(
         return "denominator"
     else:
         return "unknown"
+
+
+def _solve_quantity_placements(
+    qty_exps: list[dict[str, float]],
+    gap: dict[str, float],
+    initial_factors: dict[str, float] | None = None,
+    qty_units: list[Unit | UnitProduct | None] | None = None,
+) -> list[int] | None:
+    """Constraint solver: find sign assignments that fill the dimensional gap.
+
+    Brute-force over 2^N assignments of {+1, -1} for each quantity.
+    A sign of +1 means numerator (multiply), -1 means denominator (divide).
+
+    Args:
+        qty_exps: Dimension exponents for each quantity.
+        gap: The dimensional gap to fill.
+        initial_factors: Optional dict mapping unit names to their exponents
+            in the initial unit (e.g., {"kilogram": -1, "gram": 1, "minute": -1}).
+            Used as a secondary tiebreaker: quantities whose unit name matches
+            an initial factor are preferred in the cancelling position.
+        qty_units: Optional list of parsed unit objects for each quantity.
+            Used with initial_factors for literal unit matching.
+
+    Returns:
+        List of signs (+1 or -1 per quantity), or None if no valid assignment.
+    """
+    n = len(qty_exps)
+    if n == 0:
+        # No quantities — gap must already be zero
+        if all(abs(v) < 1e-12 for v in gap.values()):
+            return []
+        return None
+
+    # For N > 10, fall back to greedy placement
+    if n > 10:
+        signs = []
+        remaining = dict(gap)
+        for qty_exp in qty_exps:
+            placement = _determine_quantity_placement(qty_exp, remaining)
+            if placement == "numerator":
+                signs.append(+1)
+                for base, exp in qty_exp.items():
+                    remaining[base] = remaining.get(base, 0) - exp
+                    if abs(remaining[base]) < 1e-12:
+                        del remaining[base]
+            elif placement == "denominator":
+                signs.append(-1)
+                for base, exp in qty_exp.items():
+                    remaining[base] = remaining.get(base, 0) + exp
+                    if abs(remaining[base]) < 1e-12:
+                        del remaining[base]
+            else:
+                signs.append(+1)  # default to numerator
+        return signs
+
+    # Collect all base dimensions involved
+    all_bases = set(gap.keys())
+    for qe in qty_exps:
+        all_bases.update(qe.keys())
+    all_bases = sorted(all_bases)
+
+    valid_solutions = []
+
+    for mask in range(1 << n):
+        # Each bit represents a sign: 0 → +1 (numerator), 1 → -1 (denominator)
+        signs = [(-1 if (mask >> i) & 1 else +1) for i in range(n)]
+
+        # Compute residual: gap - Σ sᵢ · dᵢ
+        residual_ok = True
+        for base in all_bases:
+            gap_val = gap.get(base, 0.0)
+            contrib = sum(
+                signs[i] * qty_exps[i].get(base, 0.0) for i in range(n)
+            )
+            if abs(gap_val - contrib) > 1e-12:
+                residual_ok = False
+                break
+
+        if residual_ok:
+            valid_solutions.append(signs)
+
+    if not valid_solutions:
+        return None
+
+    if len(valid_solutions) == 1:
+        return valid_solutions[0]
+
+    def _sort_key(signs):
+        # Primary: fewest denominator placements (Occam's razor)
+        denom_count = sum(1 for x in signs if x == -1)
+
+        # Secondary: literal unit matching against initial unit factors.
+        # If a quantity's unit appears in the initial unit's factor list,
+        # prefer placing it to cancel that factor (opposite sign).
+        # Example: initial has kg^-1, quantity is kg → prefer sign=+1.
+        cancel_score = 0
+        if initial_factors and qty_units:
+            for i, sign in enumerate(signs):
+                qty_u = qty_units[i]
+                if qty_u is None:
+                    continue
+                # Get all unit names from this quantity
+                qty_names = set()
+                if isinstance(qty_u, UnitProduct):
+                    for uf in qty_u.factors:
+                        qty_names.add(uf.unit.name)
+                elif isinstance(qty_u, Unit):
+                    qty_names.add(qty_u.name)
+
+                for name in qty_names:
+                    if name in initial_factors:
+                        init_exp = initial_factors[name]
+                        # If init has negative exp, numerator placement cancels
+                        if sign == +1 and init_exp < 0:
+                            cancel_score += 1
+                        elif sign == -1 and init_exp > 0:
+                            cancel_score += 1
+
+        return (denom_count, -cancel_score)
+
+    valid_solutions.sort(key=_sort_key)
+    return valid_solutions[0]
+
+
+def _compute_bridging_factors(
+    graph: ConversionGraph,
+    initial_parsed: Unit | UnitProduct,
+    factors: list[dict],
+    target_parsed: Unit | UnitProduct,
+) -> list[dict]:
+    """Compute bridging factors for unit-level mismatches after placement.
+
+    After placing known quantities, the accumulated product may have the correct
+    dimensions but wrong units (e.g., mcg instead of mg, min instead of h).
+    This function identifies mismatched factor pairs per dimension and emits
+    individual scale conversion factors.
+
+    Handles two cases:
+    1. Cancelling pairs: e.g., µg^+1 · mg^-1 in same dimension → emit µg→mg factor
+    2. Surviving units: e.g., min^-1 vs target h^-1 → emit min→h factor
+
+    Args:
+        graph: The conversion graph.
+        initial_parsed: The parsed initial unit.
+        factors: The current factor list (from placement).
+        target_parsed: The parsed target unit.
+
+    Returns:
+        List of additional bridging factor dicts for compute().
+    """
+    bridging = []
+
+    # Build accumulator from initial_unit + placed quantities
+    accum: dict[tuple, tuple] = {}
+    _accumulate_factors(accum, initial_parsed, +1.0)
+
+    for factor in factors:
+        num_str = factor["numerator"]
+        denom_str = factor["denominator"]
+
+        if num_str != "ea":
+            with using_graph(graph):
+                num_unit, _ = resolve_unit(num_str, parameter="numerator")
+                if num_unit:
+                    _accumulate_factors(accum, num_unit, +1.0)
+
+        if denom_str != "ea":
+            denom_parts = denom_str.strip().split(None, 1)
+            if len(denom_parts) == 2 and denom_parts[0].replace('.', '').isdigit():
+                denom_unit_str = denom_parts[1]
+            else:
+                denom_unit_str = denom_str
+
+            with using_graph(graph):
+                denom_unit, _ = resolve_unit(denom_unit_str, parameter="denominator")
+                if denom_unit:
+                    _accumulate_factors(accum, denom_unit, -1.0)
+
+    # Build target ledger
+    target_accum: dict[tuple, tuple] = {}
+    _accumulate_factors(target_accum, target_parsed, +1.0)
+
+    # Group surviving factors by dimension for current product and target
+    # Factor: (unit_name, dimension, scale) → (UnitFactor, exponent)
+    current_by_dim: dict[str, list[tuple]] = {}
+    for key, (uf, exp) in accum.items():
+        if abs(exp) < 1e-12:
+            continue
+        dim_name = uf.unit.dimension.name
+        current_by_dim.setdefault(dim_name, []).append((uf, exp))
+
+    target_by_dim: dict[str, list[tuple]] = {}
+    for key, (uf, exp) in target_accum.items():
+        if abs(exp) < 1e-12:
+            continue
+        dim_name = uf.unit.dimension.name
+        target_by_dim.setdefault(dim_name, []).append((uf, exp))
+
+    # Case 1: Cancelling pairs within current product
+    # If current has two factors in the same dimension with opposite signs
+    # (e.g., µg^+1 and mg^-1), they should cancel but have a scale mismatch.
+    # The conversion factor is: src_scale / dst_scale (both are same base unit or
+    # convertible). This accounts for the fact that the pair produces a net
+    # numeric ratio when it cancels.
+    paired_dims = set()
+    for dim_name, current_factors in current_by_dim.items():
+        if len(current_factors) < 2:
+            continue
+
+        pos_factors = [(uf, exp) for uf, exp in current_factors if exp > 0]
+        neg_factors = [(uf, exp) for uf, exp in current_factors if exp < 0]
+
+        for pos_uf, pos_exp in pos_factors:
+            for neg_uf, neg_exp in neg_factors:
+                if pos_uf.unit.name == neg_uf.unit.name and pos_uf.scale == neg_uf.scale:
+                    continue  # Same unit, same scale — already cancels numerically
+
+                paired_dims.add(dim_name)
+                # Compute scale ratio: pos_unit / neg_unit (in base units)
+                try:
+                    with using_graph(graph):
+                        conv_map = graph.convert(src=pos_uf.unit, dst=neg_uf.unit)
+                    if hasattr(conv_map, 'a'):
+                        base_scale = float(conv_map.a)
+                        src_scale = float(pos_uf.scale.value.evaluated)
+                        dst_scale = float(neg_uf.scale.value.evaluated)
+                        # Net ratio when the pair cancels:
+                        # pos_uf (with its scale prefix) expressed in neg_uf's units
+                        ratio = base_scale * src_scale / dst_scale
+                        if abs(ratio - 1.0) > 1e-12:
+                            src_str = _format_unit_for_chain(
+                                UnitProduct({pos_uf: 1})
+                            )
+                            dst_str = _format_unit_for_chain(
+                                UnitProduct({neg_uf: 1})
+                            )
+                            bridging.append({
+                                "value": ratio,
+                                "numerator": dst_str,
+                                "denominator": src_str,
+                            })
+                except Exception:
+                    pass
+
+    # Case 2: Surviving units that differ from target
+    # If current has a single factor in a dimension that target also has,
+    # but with a different unit, emit a bridging factor to convert cur → tgt.
+    # The factor direction depends on the exponent sign:
+    # - Positive exponent (cur^+1 → tgt^+1): factor is ratio × tgt/cur
+    # - Negative exponent (cur^-1 → tgt^-1): factor is (1/ratio) × cur/tgt
+    #   which is equivalent to ratio_inv × cur/tgt
+    for dim_name, target_factors in target_by_dim.items():
+        if dim_name not in current_by_dim:
+            continue
+        if dim_name in paired_dims:
+            continue  # Already handled in Case 1
+
+        current_factors = current_by_dim[dim_name]
+
+        for cur_uf, cur_exp in current_factors:
+            for tgt_uf, tgt_exp in target_factors:
+                if cur_uf.unit.name == tgt_uf.unit.name and cur_uf.scale == tgt_uf.scale:
+                    continue  # Same unit — no bridging needed
+
+                try:
+                    with using_graph(graph):
+                        conv_map = graph.convert(src=cur_uf.unit, dst=tgt_uf.unit)
+                    if hasattr(conv_map, 'a'):
+                        base_scale = float(conv_map.a)
+                        cur_scale = float(cur_uf.scale.value.evaluated)
+                        tgt_scale = float(tgt_uf.scale.value.evaluated)
+                        ratio = base_scale * cur_scale / tgt_scale
+
+                        if abs(ratio - 1.0) > 1e-12:
+                            cur_str = _format_unit_for_chain(
+                                UnitProduct({cur_uf: 1})
+                            )
+                            tgt_str = _format_unit_for_chain(
+                                UnitProduct({tgt_uf: 1})
+                            )
+
+                            if cur_exp > 0:
+                                # Positive exponent: multiply by ratio × tgt/cur
+                                bridging.append({
+                                    "value": ratio,
+                                    "numerator": tgt_str,
+                                    "denominator": cur_str,
+                                })
+                            else:
+                                # Negative exponent: need inverse direction
+                                # Factor: (1/ratio) × cur/tgt
+                                bridging.append({
+                                    "value": 1.0 / ratio,
+                                    "numerator": cur_str,
+                                    "denominator": tgt_str,
+                                })
+                except Exception:
+                    pass
+
+    return bridging
 
 
 # -----------------------------------------------------------------------------

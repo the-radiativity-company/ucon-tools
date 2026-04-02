@@ -660,6 +660,201 @@ class TestDecomposeTier5Errors(DecomposeEvalBase):
 
 
 # =============================================================================
+# Tier 6: Structured Mode (known_quantities)
+# =============================================================================
+
+class TestDecomposeStructuredMode(DecomposeEvalBase):
+    """Tier 6: Structured decompose with known_quantities."""
+
+    def assert_structured_roundtrip(
+        self,
+        initial_unit: str,
+        target_unit: str,
+        known_quantities: list[dict],
+        initial_value: float,
+        expected_value: float,
+        tolerance: float = 0.01,
+        description: str = "",
+    ):
+        """Assert that structured decompose → compute produces expected result."""
+        result = self.decompose(
+            initial_unit=initial_unit,
+            target_unit=target_unit,
+            known_quantities=known_quantities,
+        )
+        self.assertIsInstance(
+            result, self.DecomposeResult,
+            f"decompose failed for structured mode: {result}"
+        )
+
+        compute_result = self.compute(
+            initial_value=initial_value,
+            initial_unit=result.initial_unit,
+            factors=result.factors,
+        )
+        self.assertIsInstance(
+            compute_result, self.ComputeResult,
+            f"compute failed for structured mode: {compute_result}"
+        )
+
+        actual = compute_result.quantity
+        rel_error = abs(actual - expected_value) / max(abs(expected_value), 1e-10)
+        self.assertLess(
+            rel_error, tolerance,
+            f"{description}: expected {expected_value}, got {actual} "
+            f"(rel_error={rel_error:.4f}, tolerance={tolerance})"
+        )
+
+    # -------------------------------------------------------------------------
+    # Eval 2.1: Weight-based dosing (regression)
+    # -------------------------------------------------------------------------
+
+    def test_weight_based_dosing(self):
+        """5 mcg/kg/min × 70 kg → 21 mg/h"""
+        self.assert_structured_roundtrip(
+            initial_unit="mcg/(kg*min)",
+            target_unit="mg/h",
+            known_quantities=[{"value": 70, "unit": "kg"}],
+            initial_value=5,
+            expected_value=21.0,
+            description="Eval 2.1: weight-based dosing",
+        )
+
+    # -------------------------------------------------------------------------
+    # Eval 2.2: IV drip rate (regression)
+    # -------------------------------------------------------------------------
+
+    def test_iv_drip_rate(self):
+        """1000 mL / 8h with 15 gtt/mL tubing → 31.25 gtt/min"""
+        self.assert_structured_roundtrip(
+            initial_unit="mL",
+            target_unit="gtt/min",
+            known_quantities=[
+                {"value": 8, "unit": "h"},
+                {"value": 15, "unit": "gtt/mL"},
+            ],
+            initial_value=1000,
+            expected_value=31.25,
+            description="Eval 2.2: IV drip rate",
+        )
+
+    # -------------------------------------------------------------------------
+    # Eval 2.3: Concentration with separate quantities (new)
+    # -------------------------------------------------------------------------
+
+    def test_concentration_separate(self):
+        """5 mcg/kg/min × 80 kg × 250 mL ÷ 400 mg → 15 mL/h"""
+        self.assert_structured_roundtrip(
+            initial_unit="mcg/(kg*min)",
+            target_unit="mL/h",
+            known_quantities=[
+                {"value": 80, "unit": "kg"},
+                {"value": 250, "unit": "mL"},
+                {"value": 400, "unit": "mg"},
+            ],
+            initial_value=5,
+            expected_value=15.0,
+            description="Eval 2.3: concentration (separate quantities)",
+        )
+
+    # -------------------------------------------------------------------------
+    # Eval 2.3b: Concentration with pre-composed ratio (new)
+    # -------------------------------------------------------------------------
+
+    def test_concentration_precomposed(self):
+        """5 mcg/kg/min × 80 kg × 0.625 mL/mg → 15 mL/h"""
+        self.assert_structured_roundtrip(
+            initial_unit="mcg/(kg*min)",
+            target_unit="mL/h",
+            known_quantities=[
+                {"value": 80, "unit": "kg"},
+                {"value": 0.625, "unit": "mL/mg"},
+            ],
+            initial_value=5,
+            expected_value=15.0,
+            description="Eval 2.3b: concentration (pre-composed ratio)",
+        )
+
+    # -------------------------------------------------------------------------
+    # Eval 2.4: Dosing with rate-form count (new)
+    # -------------------------------------------------------------------------
+
+    def test_dosing_with_rate(self):
+        """25 mg/(kg·d) × 15 kg ÷ 3 ea/d → 125 mg"""
+        self.assert_structured_roundtrip(
+            initial_unit="mg/(kg*d)",
+            target_unit="mg",
+            known_quantities=[
+                {"value": 15, "unit": "kg"},
+                {"value": 3, "unit": "ea/d"},
+            ],
+            initial_value=25,
+            expected_value=125.0,
+            description="Eval 2.4: dosing with rate-form count",
+        )
+
+    # -------------------------------------------------------------------------
+    # Eval 2.4 error: Bare count diagnostic (new)
+    # -------------------------------------------------------------------------
+
+    def test_dosing_bare_count_diagnostic(self):
+        """25 mg/(kg·d) with [15 kg, 3 ea] → error with ea/d hint"""
+        result = self.decompose(
+            initial_unit="mg/(kg*d)",
+            target_unit="mg",
+            known_quantities=[
+                {"value": 15, "unit": "kg"},
+                {"value": 3, "unit": "ea"},
+            ],
+        )
+        self.assertIsInstance(
+            result, self.ConversionError,
+            f"Expected ConversionError for bare 'ea', got: {result}"
+        )
+        self.assertEqual(result.error_type, "dimension_mismatch")
+        # Should contain a hint about expressing as a rate
+        hints_text = " ".join(result.hints or [])
+        self.assertIn(
+            "ea/d",
+            hints_text,
+            f"Expected 'ea/d' suggestion in hints: {result.hints}"
+        )
+
+    # -------------------------------------------------------------------------
+    # Eval 3.1: Specific impulse (regression)
+    # -------------------------------------------------------------------------
+
+    def test_specific_impulse(self):
+        """300 s × 9.80665 m/s² → 2941.995 m/s (Isp conversion)"""
+        self.assert_structured_roundtrip(
+            initial_unit="s",
+            target_unit="m/s",
+            known_quantities=[{"value": 9.80665, "unit": "m/s^2"}],
+            initial_value=300,
+            expected_value=2941.995,
+            description="Eval 3.1: specific impulse",
+        )
+
+    # -------------------------------------------------------------------------
+    # Ambiguous placement: two same-dimension quantities (new)
+    # -------------------------------------------------------------------------
+
+    def test_same_dimension_opposing(self):
+        """mg → mL with [250 mL, 400 mg] — 250 mL in num, 400 mg in denom"""
+        self.assert_structured_roundtrip(
+            initial_unit="mg",
+            target_unit="mL",
+            known_quantities=[
+                {"value": 250, "unit": "mL"},
+                {"value": 400, "unit": "mg"},
+            ],
+            initial_value=500,
+            expected_value=312.5,
+            description="Same-dimension opposing placement",
+        )
+
+
+# =============================================================================
 # Summary Statistics
 # =============================================================================
 
@@ -678,6 +873,7 @@ class TestDecomposeEvalSummary(unittest.TestCase):
             "Tier 3 (Advanced)": len([m for m in dir(TestDecomposeTier3Advanced) if m.startswith("test_")]),
             "Tier 4 (Expert)": len([m for m in dir(TestDecomposeTier4Expert) if m.startswith("test_")]),
             "Tier 5 (Errors)": len([m for m in dir(TestDecomposeTier5Errors) if m.startswith("test_")]),
+            "Tier 6 (Structured)": len([m for m in dir(TestDecomposeStructuredMode) if m.startswith("test_")]),
         }
 
         total = sum(tier_counts.values())
