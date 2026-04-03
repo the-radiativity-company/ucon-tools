@@ -1,3 +1,7 @@
+.uv-installed
+.vscode/
+docs/internal/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
