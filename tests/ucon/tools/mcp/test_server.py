@@ -1101,15 +1101,15 @@ class TestSessionTools(unittest.TestCase):
     def test_define_unit_success(self):
         """Test defining a custom unit successfully."""
         result = self.define_unit(
-            name="slug",
-            dimension="mass",
-            aliases=["slug"],
+            name="smoot",
+            dimension="length",
+            aliases=["smoot"],
         )
         self.assertIsInstance(result, self.UnitDefinitionResult)
         self.assertTrue(result.success)
-        self.assertEqual(result.name, "slug")
-        self.assertEqual(result.dimension, "mass")
-        self.assertEqual(result.aliases, ["slug"])
+        self.assertEqual(result.name, "smoot")
+        self.assertEqual(result.dimension, "length")
+        self.assertEqual(result.aliases, ["smoot"])
 
     def test_define_unit_invalid_dimension(self):
         """Test that invalid dimension returns error with suggestions."""
@@ -1123,15 +1123,15 @@ class TestSessionTools(unittest.TestCase):
     def test_define_conversion_success(self):
         """Test defining a conversion edge successfully."""
         # First define the unit
-        self.define_unit(name="slug", dimension="mass", aliases=["slug"])
+        self.define_unit(name="smoot", dimension="length", aliases=["smoot"])
 
         # Then define the conversion
-        result = self.define_conversion(src="slug", dst="kg", factor=14.5939)
+        result = self.define_conversion(src="smoot", dst="m", factor=1.7018)
         self.assertIsInstance(result, self.ConversionDefinitionResult)
         self.assertTrue(result.success)
-        self.assertEqual(result.src, "slug")
-        self.assertEqual(result.dst, "kg")
-        self.assertAlmostEqual(result.factor, 14.5939)
+        self.assertEqual(result.src, "smoot")
+        self.assertEqual(result.dst, "m")
+        self.assertAlmostEqual(result.factor, 1.7018)
 
     def test_define_conversion_unknown_unit(self):
         """Test that conversion with unknown unit returns error."""
@@ -1146,22 +1146,22 @@ class TestSessionTools(unittest.TestCase):
     def test_session_unit_usable_in_convert(self):
         """Test that session-defined unit can be used in convert()."""
         # Define unit and conversion
-        self.define_unit(name="slug", dimension="mass", aliases=["slug"])
-        self.define_conversion(src="slug", dst="kg", factor=14.5939)
+        self.define_unit(name="smoot", dimension="length", aliases=["smoot"])
+        self.define_conversion(src="smoot", dst="m", factor=1.7018)
 
         # Use in convert
-        result = self.convert(1, "slug", "kg")
+        result = self.convert(1, "smoot", "m")
         self.assertNotIsInstance(result, self.ConversionError)
-        self.assertAlmostEqual(result.quantity, 14.5939, places=3)
+        self.assertAlmostEqual(result.quantity, 1.7018, places=3)
 
     def test_reset_session_clears_custom_units(self):
         """Test that reset_session() clears custom units."""
         # Define unit and conversion
-        self.define_unit(name="slug", dimension="mass", aliases=["slug"])
-        self.define_conversion(src="slug", dst="kg", factor=14.5939)
+        self.define_unit(name="smoot", dimension="length", aliases=["smoot"])
+        self.define_conversion(src="smoot", dst="m", factor=1.7018)
 
         # Verify it works
-        result = self.convert(1, "slug", "kg")
+        result = self.convert(1, "smoot", "m")
         self.assertNotIsInstance(result, self.ConversionError)
 
         # Reset session
@@ -1170,7 +1170,7 @@ class TestSessionTools(unittest.TestCase):
         self.assertTrue(reset_result.success)
 
         # Verify unit is no longer available
-        result = self.convert(1, "slug", "kg")
+        result = self.convert(1, "smoot", "m")
         self.assertIsInstance(result, self.ConversionError)
         self.assertEqual(result.error_type, "unknown_unit")
 
@@ -1205,36 +1205,36 @@ class TestInlineParameters(unittest.TestCase):
         """Test convert() with inline custom_units and custom_edges."""
         result = self.convert(
             value=1,
-            from_unit="slug",
-            to_unit="kg",
+            from_unit="smoot",
+            to_unit="m",
             custom_units=[
-                {"name": "slug", "dimension": "mass", "aliases": ["slug"]},
+                {"name": "smoot", "dimension": "length", "aliases": ["smoot"]},
             ],
             custom_edges=[
-                {"src": "slug", "dst": "kg", "factor": 14.5939},
+                {"src": "smoot", "dst": "m", "factor": 1.7018},
             ],
         )
         self.assertNotIsInstance(result, self.ConversionError)
-        self.assertAlmostEqual(result.quantity, 14.5939, places=3)
+        self.assertAlmostEqual(result.quantity, 1.7018, places=3)
 
     def test_inline_does_not_modify_session(self):
         """Test that inline definitions don't persist to session."""
         # Use inline definition
         result = self.convert(
             value=1,
-            from_unit="slug",
-            to_unit="kg",
+            from_unit="smoot",
+            to_unit="m",
             custom_units=[
-                {"name": "slug", "dimension": "mass", "aliases": ["slug"]},
+                {"name": "smoot", "dimension": "length", "aliases": ["smoot"]},
             ],
             custom_edges=[
-                {"src": "slug", "dst": "kg", "factor": 14.5939},
+                {"src": "smoot", "dst": "m", "factor": 1.7018},
             ],
         )
         self.assertNotIsInstance(result, self.ConversionError)
 
         # Without inline, unit should not be available
-        result = self.convert(1, "slug", "kg")
+        result = self.convert(1, "smoot", "m")
         self.assertIsInstance(result, self.ConversionError)
         self.assertEqual(result.error_type, "unknown_unit")
 
@@ -1242,16 +1242,16 @@ class TestInlineParameters(unittest.TestCase):
         """Test compute() with inline custom_units."""
         result = self.compute(
             initial_value=1,
-            initial_unit="slug",
+            initial_unit="smoot",
             factors=[
-                {"value": 14.5939, "numerator": "kg", "denominator": "slug"},
+                {"value": 1.7018, "numerator": "m", "denominator": "smoot"},
             ],
             custom_units=[
-                {"name": "slug", "dimension": "mass", "aliases": ["slug"]},
+                {"name": "smoot", "dimension": "length", "aliases": ["smoot"]},
             ],
         )
         self.assertNotIsInstance(result, self.ConversionError)
-        self.assertAlmostEqual(result.quantity, 14.5939, places=3)
+        self.assertAlmostEqual(result.quantity, 1.7018, places=3)
 
     def test_invalid_inline_unit_dimension(self):
         """Test that invalid dimension in inline unit returns error."""
@@ -1282,24 +1282,24 @@ class TestInlineParameters(unittest.TestCase):
     def test_recovery_pattern(self):
         """Test agent recovery pattern: unknown_unit error → retry with inline."""
         # First call fails
-        result = self.convert(1, "slug", "kg")
+        result = self.convert(1, "smoot", "m")
         self.assertIsInstance(result, self.ConversionError)
         self.assertEqual(result.error_type, "unknown_unit")
 
         # Retry with inline definitions succeeds
         result = self.convert(
             value=1,
-            from_unit="slug",
-            to_unit="kg",
+            from_unit="smoot",
+            to_unit="m",
             custom_units=[
-                {"name": "slug", "dimension": "mass", "aliases": ["slug"]},
+                {"name": "smoot", "dimension": "length", "aliases": ["smoot"]},
             ],
             custom_edges=[
-                {"src": "slug", "dst": "kg", "factor": 14.5939},
+                {"src": "smoot", "dst": "m", "factor": 1.7018},
             ],
         )
         self.assertNotIsInstance(result, self.ConversionError)
-        self.assertAlmostEqual(result.quantity, 14.5939, places=3)
+        self.assertAlmostEqual(result.quantity, 1.7018, places=3)
 
 
 class TestGraphCaching(unittest.TestCase):
@@ -1795,13 +1795,13 @@ class TestAffineConversion(unittest.TestCase):
 
     def test_define_conversion_offset_default_zero(self):
         """Test that omitting offset defaults to linear (offset=0)."""
-        self.define_unit(name="slug", dimension="mass", aliases=["slug"])
-        result = self.define_conversion(src="slug", dst="kg", factor=14.5939)
+        self.define_unit(name="smoot", dimension="length", aliases=["smoot"])
+        result = self.define_conversion(src="smoot", dst="m", factor=1.7018)
         self.assertIsInstance(result, self.ConversionDefinitionResult)
         self.assertTrue(result.success)
         self.assertAlmostEqual(result.offset, 0.0)
 
         # Verify linear behavior
-        result = self.convert(1, "slug", "kg")
+        result = self.convert(1, "smoot", "m")
         self.assertNotIsInstance(result, self.ConversionError)
-        self.assertAlmostEqual(result.quantity, 14.5939, places=3)
+        self.assertAlmostEqual(result.quantity, 1.7018, places=3)

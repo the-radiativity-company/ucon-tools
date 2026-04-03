@@ -75,7 +75,7 @@ def _get_fuzzy_corpus() -> list[str]:
     Returns the case-insensitive keys from _UNIT_REGISTRY.
     Excludes generated scaled variants (km, MHz, etc.) to prevent dilution.
     """
-    from ucon.units import _UNIT_REGISTRY
+    from ucon.resolver import _UNIT_REGISTRY
 
     return list(_UNIT_REGISTRY.keys())
 
@@ -100,7 +100,7 @@ def _suggest_units(bad_name: str) -> tuple[str | None, list[str]]:
         the top match scores >= 0.7 and is significantly better than
         alternatives. Ambiguous matches go to hints only.
     """
-    from ucon.units import _UNIT_REGISTRY
+    from ucon.resolver import _UNIT_REGISTRY
 
     corpus = _get_fuzzy_corpus()
     matches = get_close_matches(bad_name.lower(), corpus, n=3, cutoff=0.6)
