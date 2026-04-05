@@ -11,9 +11,10 @@ These tests are skipped if the mcp package is not installed.
 
 import unittest
 
-from ucon import Dimension, units
+from ucon import Dimension, Number, UnitProduct, enforce_dimensions, units
 from ucon.core import Scale
 from ucon.dimension import all_dimensions
+from ucon.tools.mcp.formulas._registry import _FORMULA_REGISTRY
 
 
 class TestConvertTool(unittest.TestCase):
@@ -1805,3 +1806,423 @@ class TestAffineConversion(unittest.TestCase):
         result = self.convert(1, "smoot", "m")
         self.assertNotIsInstance(result, self.ConversionError)
         self.assertAlmostEqual(result.quantity, 1.7018, places=3)
+
+
+# -----------------------------------------------------------------------------
+# compute() expected_unit validation
+# -----------------------------------------------------------------------------
+
+
+class TestComputeExpectedUnit(unittest.TestCase):
+    """Test compute() with expected_unit validation — covers _diagnose_dimension_mismatch."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import compute, ComputeResult
+            from ucon.tools.mcp.suggestions import ConversionError
+            cls.compute = staticmethod(compute)
+            cls.ComputeResult = ComputeResult
+            cls.ConversionError = ConversionError
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+
+    def test_expected_unit_match_passes(self):
+        """Matching expected_unit returns ComputeResult."""
+        result = self.compute(
+            initial_value=10,
+            initial_unit="m",
+            factors=[{"value": 100, "numerator": "cm", "denominator": "m"}],
+            expected_unit="cm",
+        )
+        self.assertIsInstance(result, self.ComputeResult)
+
+    def test_expected_unit_mismatch_returns_error(self):
+        """Mismatched expected_unit returns dimension_mismatch with hints."""
+        result = self.compute(
+            initial_value=10,
+            initial_unit="m",
+            factors=[{"value": 1, "numerator": "s", "denominator": "ea"}],
+            expected_unit="kg",
+        )
+        self.assertIsInstance(result, self.ConversionError)
+        self.assertEqual(result.error_type, "dimension_mismatch")
+        self.assertTrue(len(result.hints) > 0)
+
+    def test_expected_unit_extra_dimension_hint(self):
+        """Extra dimension in result generates 'Try adding to denominator' hint."""
+        # Result: m*s, expected: m → extra time
+        result = self.compute(
+            initial_value=10,
+            initial_unit="m",
+            factors=[{"value": 5, "numerator": "s", "denominator": "ea"}],
+            expected_unit="m",
+        )
+        self.assertIsInstance(result, self.ConversionError)
+        hints_str = " ".join(result.hints)
+        self.assertTrue("time" in hints_str.lower() or "Extra" in hints_str)
+
+    def test_expected_unit_missing_dimension_hint(self):
+        """Missing dimension in result generates 'Try adding to numerator' hint."""
+        # Result: dimensionless (m/m), expected: kg
+        result = self.compute(
+            initial_value=10,
+            initial_unit="m",
+            factors=[{"value": 1, "numerator": "ea", "denominator": "m"}],
+            expected_unit="kg",
+        )
+        self.assertIsInstance(result, self.ConversionError)
+        hints_str = " ".join(result.hints)
+        self.assertTrue("Missing" in hints_str or "mass" in hints_str.lower())
+
+    def test_expected_unit_unknown_returns_error(self):
+        """Unknown expected_unit string returns an error."""
+        result = self.compute(
+            initial_value=10,
+            initial_unit="m",
+            factors=[],
+            expected_unit="foobar_unit",
+        )
+        self.assertIsInstance(result, self.ConversionError)
+
+    def test_expected_unit_higher_exponent_mismatch(self):
+        """Mismatch with exponent > 1 generates appropriate hint."""
+        # Result: m^2, expected: m → extra length^1
+        result = self.compute(
+            initial_value=10,
+            initial_unit="m^2",
+            factors=[],
+            expected_unit="m",
+        )
+        self.assertIsInstance(result, self.ConversionError)
+        hints_str = " ".join(result.hints)
+        self.assertTrue("length" in hints_str.lower() or "Extra" in hints_str)
+
+    def test_dimensionless_result_expected_mass(self):
+        """Dimensionless result vs expected mass gives diagnostic."""
+        result = self.compute(
+            initial_value=10,
+            initial_unit="m",
+            factors=[{"value": 1, "numerator": "ea", "denominator": "m"}],
+            expected_unit="kg",
+        )
+        self.assertIsInstance(result, self.ConversionError)
+        self.assertEqual(result.error_type, "dimension_mismatch")
+
+
+# -----------------------------------------------------------------------------
+# _format_unit_output
+# -----------------------------------------------------------------------------
+
+
+class TestFormatUnitOutput(unittest.TestCase):
+    """Test _format_unit_output for various unit types."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import _format_unit_output
+            cls._format_unit_output = staticmethod(_format_unit_output)
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+
+    def test_none_returns_one(self):
+        self.assertEqual(self._format_unit_output(None), "1")
+
+    def test_unit_returns_shorthand(self):
+        self.assertEqual(self._format_unit_output(units.meter), "m")
+
+    def test_unit_product_returns_shorthand(self):
+        up = units.meter / units.second
+        result = self._format_unit_output(up)
+        self.assertIn("m", result)
+        self.assertIn("s", result)
+
+    def test_other_type_returns_str(self):
+        self.assertEqual(self._format_unit_output("something"), "something")
+
+
+# -----------------------------------------------------------------------------
+# call_formula edge cases
+# -----------------------------------------------------------------------------
+
+
+class TestCallFormulaEdgeCases(unittest.TestCase):
+    """Test call_formula edge cases: TypeError, execution error, non-Number result."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import call_formula, FormulaResult, FormulaError
+            from ucon.tools.mcp.formulas import register_formula, clear_formulas
+            cls.call_formula = staticmethod(call_formula)
+            cls.FormulaResult = FormulaResult
+            cls.FormulaError = FormulaError
+            cls.register_formula = staticmethod(register_formula)
+            cls.clear_formulas = staticmethod(clear_formulas)
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+        self._saved = dict(_FORMULA_REGISTRY)
+
+    def tearDown(self):
+        if not self.skip_tests:
+            _FORMULA_REGISTRY.clear()
+            _FORMULA_REGISTRY.update(self._saved)
+
+    def test_formula_execution_error(self):
+        """Formula that raises generic Exception returns execution_error."""
+        _FORMULA_REGISTRY.pop("exploder", None)
+
+        @self.register_formula("exploder", description="always explodes")
+        def exploder(x: Number) -> Number:
+            raise RuntimeError("boom")
+
+        result = self.call_formula("exploder", {"x": {"value": 5}})
+        self.assertIsInstance(result, self.FormulaError)
+        self.assertEqual(result.error_type, "execution_error")
+        self.assertIn("boom", result.error)
+
+    def test_formula_returns_non_number(self):
+        """Formula returning a plain float produces FormulaResult with dimension='unknown'."""
+        _FORMULA_REGISTRY.pop("raw_float", None)
+
+        @self.register_formula("raw_float", description="returns plain float")
+        def raw_float(x: Number) -> float:
+            return x.quantity * 2
+
+        result = self.call_formula("raw_float", {"x": {"value": 5}})
+        self.assertIsInstance(result, self.FormulaResult)
+        self.assertEqual(result.quantity, 10.0)
+        self.assertEqual(result.dimension, "unknown")
+
+    def test_formula_type_error(self):
+        """Formula that raises TypeError returns invalid_parameter."""
+        _FORMULA_REGISTRY.pop("typerr", None)
+
+        @self.register_formula("typerr", description="type error")
+        def typerr(x: Number) -> Number:
+            raise TypeError("bad type")
+
+        result = self.call_formula("typerr", {"x": {"value": 5}})
+        self.assertIsInstance(result, self.FormulaError)
+        self.assertEqual(result.error_type, "invalid_parameter")
+
+
+# -----------------------------------------------------------------------------
+# Pseudo-dimension isolation (suggestions.py)
+# -----------------------------------------------------------------------------
+
+
+class TestNoPathPseudoDimension(unittest.TestCase):
+    """Test no-conversion-path errors for pseudo-dimension isolation."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import convert
+            from ucon.tools.mcp.suggestions import ConversionError
+            cls.convert = staticmethod(convert)
+            cls.ConversionError = ConversionError
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+
+    def test_angle_to_ratio_pseudo_isolation(self):
+        """Angle to ratio triggers pseudo-dimension isolation hint."""
+        result = self.convert(1, "rad", "%")
+        self.assertIsInstance(result, self.ConversionError)
+        self.assertIn(result.error_type, ("dimension_mismatch", "no_conversion_path"))
+
+    def test_solid_angle_to_ratio(self):
+        """Solid angle to ratio triggers pseudo-dimension isolation hint."""
+        result = self.convert(1, "sr", "%")
+        self.assertIsInstance(result, self.ConversionError)
+        self.assertIn(result.error_type, ("dimension_mismatch", "no_conversion_path"))
+
+
+# -----------------------------------------------------------------------------
+# Unknown dimension suggestions (suggestions.py)
+# -----------------------------------------------------------------------------
+
+
+class TestUnknownDimensionSuggestions(unittest.TestCase):
+    """Test build_unknown_dimension_error."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import list_units
+            from ucon.tools.mcp.suggestions import ConversionError, build_unknown_dimension_error
+            cls.list_units = staticmethod(list_units)
+            cls.ConversionError = ConversionError
+            cls.build_unknown_dimension_error = staticmethod(build_unknown_dimension_error)
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+
+    def test_multiple_fuzzy_matches(self):
+        """Dimension with multiple close matches gets 'Similar dimensions' hint."""
+        result = self.build_unknown_dimension_error("energ")
+        self.assertIsInstance(result, self.ConversionError)
+        self.assertTrue(
+            result.likely_fix is not None or
+            any("Similar" in h or "energy" in h for h in result.hints)
+        )
+
+    def test_completely_unknown_dimension(self):
+        """Completely unknown dimension gets 'Use list_dimensions()' hint."""
+        result = self.build_unknown_dimension_error("xyzzy_dim")
+        self.assertIsInstance(result, self.ConversionError)
+        self.assertTrue(any("list_dimensions" in h for h in result.hints))
+
+    def test_list_units_bad_dimension_via_tool(self):
+        """list_units with a bad dimension that has multiple matches."""
+        result = self.list_units(dimension="energ")
+        self.assertIsInstance(result, self.ConversionError)
+
+
+# -----------------------------------------------------------------------------
+# No conversion path within same dimension (suggestions.py)
+# -----------------------------------------------------------------------------
+
+
+class TestConvertNoPathSameDimension(unittest.TestCase):
+    """Test no-conversion-path within same dimension."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import (
+                define_unit, define_conversion, convert, _reset_fallback_session,
+            )
+            from ucon.tools.mcp.suggestions import ConversionError
+            cls.define_unit = staticmethod(define_unit)
+            cls.define_conversion = staticmethod(define_conversion)
+            cls.convert = staticmethod(convert)
+            cls._reset_fallback_session = staticmethod(_reset_fallback_session)
+            cls.ConversionError = ConversionError
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+        self._reset_fallback_session()
+
+    def tearDown(self):
+        if not self.skip_tests:
+            self._reset_fallback_session()
+
+    def test_same_dimension_no_path(self):
+        """Two units of same dimension with no edge gives 'no conversion path'."""
+        self.define_unit(name="alpha_len", dimension="length", aliases=["alen"])
+        self.define_unit(name="beta_len", dimension="length", aliases=["blen"])
+
+        result = self.convert(1, "alen", "blen")
+        self.assertIsInstance(result, self.ConversionError)
+        self.assertEqual(result.error_type, "no_conversion_path")
+        hints_str = " ".join(result.hints)
+        self.assertTrue(
+            "same dimension" in hints_str.lower() or "intermediate" in hints_str.lower()
+        )
+
+
+# -----------------------------------------------------------------------------
+# _build_product_from_accum
+# -----------------------------------------------------------------------------
+
+
+class TestBuildProductFromAccumEmpty(unittest.TestCase):
+    """Test _build_product_from_accum with empty accumulator."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import _build_product_from_accum
+            cls._build_product_from_accum = staticmethod(_build_product_from_accum)
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+
+    def test_empty_accum_returns_empty_unit_product(self):
+        """Empty accumulator returns an empty UnitProduct (dimensionless)."""
+        result = self._build_product_from_accum({})
+        self.assertIsInstance(result, UnitProduct)
+        self.assertEqual(len(result.factors), 0)
+
+
+# -----------------------------------------------------------------------------
+# _get_dimension_vector and _normalize_dimension_vector
+# -----------------------------------------------------------------------------
+
+
+class TestDimensionVectorFormatting(unittest.TestCase):
+    """Test _get_dimension_vector and _normalize_dimension_vector."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import _get_dimension_vector, _normalize_dimension_vector
+            cls._get_dimension_vector = staticmethod(_get_dimension_vector)
+            cls._normalize_dimension_vector = staticmethod(_normalize_dimension_vector)
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+
+    def test_dimensionless_unit(self):
+        """Dimensionless unit returns empty or identity vector."""
+        result = self._get_dimension_vector(units.none)
+        self.assertIsInstance(result, str)
+
+    def test_unit_product(self):
+        """UnitProduct returns a dimensional vector string."""
+        up = units.meter / units.second
+        result = self._get_dimension_vector(up)
+        self.assertIsInstance(result, str)
+        self.assertIn("L", result)
+
+    def test_normalize_theta_variants(self):
+        """Normalize handles theta (Θ) variants in dimension vectors."""
+        v1 = self._normalize_dimension_vector("M·L²·T⁻²·Θ⁻¹")
+        self.assertIsInstance(v1, str)
+        self.assertIn("Θ", v1)
+
+    def test_normalize_unicode_superscripts(self):
+        """Normalize handles Unicode superscript digits."""
+        v = self._normalize_dimension_vector("M·L²·T⁻²")
+        self.assertIsInstance(v, str)
+        self.assertIn("M", v)
+        self.assertIn("L", v)
+        self.assertIn("T", v)

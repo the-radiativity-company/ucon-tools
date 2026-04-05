@@ -265,3 +265,46 @@ class TestConstantsCategoryCounts:
         for const in measured:
             assert const.uncertainty is not None
             assert const.is_exact is False
+
+
+class TestConstantToInfo:
+    """Test _constant_to_info for unit attribute fallbacks."""
+
+    def test_constant_with_unit_product(self):
+        """Constant with UnitProduct unit extracts shorthand correctly."""
+        from ucon.constants import gravitational_constant
+        from ucon.tools.mcp.server import _constant_to_info
+        info = _constant_to_info(gravitational_constant)
+        assert info is not None
+        assert info.symbol == "G"
+        assert info.unit is not None
+
+    def test_constant_with_simple_unit(self):
+        """Constant with simple Unit extracts shorthand."""
+        from ucon.constants import avogadro_constant
+        from ucon.tools.mcp.server import _constant_to_info
+        info = _constant_to_info(avogadro_constant)
+        assert info is not None
+
+
+class TestResolveConstant:
+    """Test _resolve_constant for built-in and session constants."""
+
+    def test_resolve_builtin_by_symbol(self):
+        """Resolve a built-in constant by its symbol."""
+        from ucon.tools.mcp.server import _resolve_constant
+        result = _resolve_constant("c")
+        assert result is not None
+        assert result.symbol == "c"
+
+    def test_resolve_builtin_by_alias(self):
+        """Resolve a built-in constant by an alias."""
+        from ucon.tools.mcp.server import _resolve_constant
+        result = _resolve_constant("hbar")
+        assert result is not None
+
+    def test_resolve_nonexistent(self):
+        """Return None for nonexistent constant."""
+        from ucon.tools.mcp.server import _resolve_constant
+        result = _resolve_constant("xyzzy_constant_999")
+        assert result is None

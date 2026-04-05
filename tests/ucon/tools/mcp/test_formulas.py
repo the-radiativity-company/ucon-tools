@@ -13,15 +13,18 @@ from ucon.tools.mcp.formulas import (
     get_formula,
     clear_formulas,
 )
+from ucon.tools.mcp.formulas._registry import _FORMULA_REGISTRY
 from ucon.tools.mcp.schema import extract_dimension_constraints
 
 
 @pytest.fixture(autouse=True)
 def clean_registry():
-    """Clear formula registry before and after each test."""
+    """Save built-in formulas, clear for isolated test, then restore."""
+    saved = dict(_FORMULA_REGISTRY)
     clear_formulas()
     yield
     clear_formulas()
+    _FORMULA_REGISTRY.update(saved)
 
 
 # -----------------------------------------------------------------------------
@@ -368,3 +371,19 @@ class TestCallFormula:
         assert isinstance(result, FormulaResult)
         assert result.quantity == 10.0
         assert result.unit == "m/s"
+
+
+# -----------------------------------------------------------------------------
+# Schema Edge Cases
+# -----------------------------------------------------------------------------
+
+
+class TestSchemaEdgeCases:
+    """Test extract_dimension_constraints edge cases."""
+
+    def test_forward_ref_fallback(self):
+        """Function with unresolvable forward refs returns empty dict."""
+        fn = lambda x: x
+        fn.__annotations__ = {"x": "NonExistentType"}
+        result = extract_dimension_constraints(fn)
+        assert result == {}
