@@ -371,3 +371,19 @@ class TestCallFormula:
         assert isinstance(result, FormulaResult)
         assert result.quantity == 10.0
         assert result.unit == "m/s"
+
+
+# -----------------------------------------------------------------------------
+# Schema Edge Cases
+# -----------------------------------------------------------------------------
+
+
+class TestSchemaEdgeCases:
+    """Test extract_dimension_constraints edge cases."""
+
+    def test_forward_ref_fallback(self):
+        """Function with unresolvable forward refs returns empty dict."""
+        fn = lambda x: x
+        fn.__annotations__ = {"x": "NonExistentType"}
+        result = extract_dimension_constraints(fn)
+        assert result == {}

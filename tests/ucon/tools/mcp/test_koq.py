@@ -878,5 +878,143 @@ class TestKOQSessionReset(unittest.TestCase):
         self.assertEqual(len(bases), 0)
 
 
+# -----------------------------------------------------------------------------
+# KOQ helper function edge cases
+# -----------------------------------------------------------------------------
+
+
+class TestKOQEdgeCases(unittest.TestCase):
+    """Test KOQ helper functions with edge-case inputs."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.koq import (
+                get_quantity_kind, get_kinds_by_dimension,
+                check_semantic_conflicts, QuantityKindInfo,
+            )
+            cls.get_quantity_kind = staticmethod(get_quantity_kind)
+            cls.get_kinds_by_dimension = staticmethod(get_kinds_by_dimension)
+            cls.check_semantic_conflicts = staticmethod(check_semantic_conflicts)
+            cls.QuantityKindInfo = QuantityKindInfo
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+
+    def test_get_quantity_kind_by_alias(self):
+        """get_quantity_kind finds a kind by its alias."""
+        kinds = {
+            "test_kind": self.QuantityKindInfo(
+                name="test_kind",
+                dimension_name="energy",
+                dimension_vector="M·L²·T⁻²",
+                description="test",
+                aliases=("alt_name", "other_name"),
+                category="session",
+            )
+        }
+        result = self.get_quantity_kind("alt_name", session_kinds=kinds)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.name, "test_kind")
+
+    def test_get_quantity_kind_not_found(self):
+        """get_quantity_kind returns None for unknown name."""
+        kinds = {
+            "test_kind": self.QuantityKindInfo(
+                name="test_kind",
+                dimension_name="energy",
+                dimension_vector="M·L²·T⁻²",
+                description="test",
+            )
+        }
+        result = self.get_quantity_kind("nonexistent", session_kinds=kinds)
+        self.assertIsNone(result)
+
+    def test_get_kinds_by_dimension_empty_session(self):
+        """get_kinds_by_dimension returns [] when session_kinds is None."""
+        result = self.get_kinds_by_dimension("M·L²·T⁻²", session_kinds=None)
+        self.assertEqual(result, [])
+
+    def test_check_semantic_conflicts_empty_reasoning(self):
+        """check_semantic_conflicts returns [] for empty reasoning."""
+        result = self.check_semantic_conflicts("gibbs_energy", "")
+        self.assertEqual(result, [])
+
+    def test_check_semantic_conflicts_none_reasoning(self):
+        """check_semantic_conflicts returns [] for None-like reasoning."""
+        result = self.check_semantic_conflicts("gibbs_energy", "")
+        self.assertEqual(result, [])
+
+
+# -----------------------------------------------------------------------------
+# KOQ MCP tool endpoint edge cases
+# -----------------------------------------------------------------------------
+
+
+class TestKOQMCPToolEdgeCases(unittest.TestCase):
+    """Test KOQ MCP tool endpoints for edge cases."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import (
+                define_quantity_kind, declare_computation, validate_result,
+                list_quantity_kinds, _reset_fallback_session,
+            )
+            from ucon.tools.mcp.koq import KOQError
+            cls.define_quantity_kind = staticmethod(define_quantity_kind)
+            cls.declare_computation = staticmethod(declare_computation)
+            cls.validate_result = staticmethod(validate_result)
+            cls.list_quantity_kinds = staticmethod(list_quantity_kinds)
+            cls._reset_fallback_session = staticmethod(_reset_fallback_session)
+            cls.KOQError = KOQError
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+        self._reset_fallback_session()
+
+    def tearDown(self):
+        if not self.skip_tests:
+            self._reset_fallback_session()
+
+    def test_declare_unknown_kind(self):
+        """declare_computation with unknown kind returns KOQError."""
+        result = self.declare_computation(
+            quantity_kind="nonexistent_kind",
+            expected_unit="J/mol",
+        )
+        self.assertIsInstance(result, self.KOQError)
+
+    def test_validate_result_unknown_unit(self):
+        """validate_result with unknown unit returns KOQError."""
+        self.define_quantity_kind(
+            name="test_energy",
+            dimension="energy",
+            description="test",
+        )
+        self.declare_computation(
+            quantity_kind="test_energy",
+            expected_unit="J",
+        )
+        result = self.validate_result(
+            value=100.0,
+            unit="foobar_unit",
+        )
+        self.assertIsInstance(result, self.KOQError)
+
+    def test_list_quantity_kinds_bad_dimension_filter(self):
+        """list_quantity_kinds with unrecognizable dimension filter."""
+        result = self.list_quantity_kinds(dimension="xyzzy_dim_999")
+        self.assertIsInstance(result, list)
+
+
 if __name__ == "__main__":
     unittest.main()
