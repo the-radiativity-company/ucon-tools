@@ -23,6 +23,8 @@ def orbital_velocity(
     body_mass: Number[Dimension.mass],
     orbital_radius: Number[Dimension.length],
 ) -> Number:
+    body_mass = body_mass.to_base()
+    orbital_radius = orbital_radius.to_base()
     return (G * body_mass / orbital_radius) ** 0.5
 
 
@@ -35,6 +37,8 @@ def escape_velocity(
     body_mass: Number[Dimension.mass],
     radius: Number[Dimension.length],
 ) -> Number:
+    body_mass = body_mass.to_base()
+    radius = radius.to_base()
     return (G * body_mass * 2 / radius) ** 0.5
 
 
@@ -47,6 +51,8 @@ def orbital_period(
     semi_major_axis: Number[Dimension.length],
     body_mass: Number[Dimension.mass],
 ) -> Number:
+    semi_major_axis = semi_major_axis.to_base()
+    body_mass = body_mass.to_base()
     return Number(2 * math.pi) * ((semi_major_axis ** 3) / (G * body_mass)) ** 0.5
 
 
@@ -60,8 +66,10 @@ def tsiolkovsky_delta_v(
     wet_mass: Number[Dimension.mass],
     dry_mass: Number[Dimension.mass],
 ) -> Number:
-    m0 = wet_mass.to(units.kilogram).quantity
-    mf = dry_mass.to(units.kilogram).quantity
+    wet_mass = wet_mass.to_base()
+    dry_mass = dry_mass.to_base()
+    m0 = wet_mass.quantity
+    mf = dry_mass.quantity
     return specific_impulse * g0 * math.log(m0 / mf)
 
 
@@ -74,4 +82,6 @@ def thrust(
     mass_flow_rate: Number,
     exhaust_velocity: Number[Dimension.velocity],
 ) -> Number:
+    mass_flow_rate = mass_flow_rate.to_base()
+    exhaust_velocity = exhaust_velocity.to_base()
     return mass_flow_rate * exhaust_velocity
