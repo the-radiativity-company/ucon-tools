@@ -33,6 +33,9 @@ def gravitational_force(
     mass2: Number[Dimension.mass],
     distance: Number[Dimension.length],
 ) -> Number:
+    mass1 = mass1.to_base()
+    mass2 = mass2.to_base()
+    distance = distance.to_base()
     return G * mass1 * mass2 / (distance ** 2)
 
 
@@ -44,6 +47,7 @@ def gravitational_force(
 def photon_energy(
     frequency: Number[Dimension.frequency],
 ) -> Number:
+    frequency = frequency.to_base()
     return h * frequency
 
 
@@ -57,6 +61,9 @@ def coulombs_law(
     charge2: Number[Dimension.charge],
     distance: Number[Dimension.length],
 ) -> Number:
+    charge1 = charge1.to_base()
+    charge2 = charge2.to_base()
+    distance = distance.to_base()
     return charge1 * charge2 / (Number(4 * math.pi) * eps0 * (distance ** 2))
 
 
@@ -69,6 +76,7 @@ def projectile_range(
     initial_velocity: Number[Dimension.velocity],
     launch_angle: Number[Dimension.angle],
 ) -> Number:
+    initial_velocity = initial_velocity.to_base()
     angle_rad = launch_angle.to(units.radian).quantity
     return (initial_velocity ** 2) * math.sin(2 * angle_rad) / g0
 
@@ -81,4 +89,5 @@ def projectile_range(
 def schwarzschild_radius(
     mass: Number[Dimension.mass],
 ) -> Number:
+    mass = mass.to_base()
     return G * mass * 2 / (c ** 2)

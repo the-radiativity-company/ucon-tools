@@ -65,6 +65,9 @@ def darcy_weisbach(
     pipe_diameter: Number[Dimension.length],
     flow_velocity: Number[Dimension.velocity],
 ) -> Number:
+    pipe_length = pipe_length.to_base()
+    pipe_diameter = pipe_diameter.to_base()
+    flow_velocity = flow_velocity.to_base()
     return friction_factor * (pipe_length / pipe_diameter) * (flow_velocity ** 2) / (Number(2) * g0)
 
 
@@ -77,4 +80,6 @@ def kinetic_energy(
     mass: Number[Dimension.mass],
     velocity: Number[Dimension.velocity],
 ) -> Number:
+    mass = mass.to_base()
+    velocity = velocity.to_base()
     return mass * (velocity ** 2) * 0.5

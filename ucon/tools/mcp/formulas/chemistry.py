@@ -21,6 +21,9 @@ def ideal_gas_pressure(
     temperature: Number[Dimension.temperature],
     volume: Number[Dimension.volume],
 ) -> Number:
+    amount = amount.to_base()
+    temperature = temperature.to_base()
+    volume = volume.to_base()
     return amount * R * temperature / volume
 
 
@@ -71,4 +74,7 @@ def gibbs_free_energy(
     temperature: Number[Dimension.temperature],
     entropy: Number[Dimension.entropy],
 ) -> Number:
+    enthalpy = enthalpy.to_base()
+    temperature = temperature.to_base()
+    entropy = entropy.to_base()
     return enthalpy - temperature * entropy
