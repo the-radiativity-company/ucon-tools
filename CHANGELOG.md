@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Left-to-right associativity tests** for the `convert` tool
+  (`TestConvertLeftToRightAssociativity`, 5 tests):
+  - `m/s*kg` parses as `(m/s)·kg`, not `m/(s·kg)`
+  - `m/s*kg` ≠ `m/(s*kg)` (dimension mismatch)
+  - `J/mol*K` ≠ `J/(mol*K)` — parentheses required for multi-term denominators
+  - Chained division `mg/kg/day` identity
+  - Parenthesized denominator `J/(mol*K)` identity
+
+- **Constant unit integrity tests** (`TestConstantUnitIntegrity`, 3 tests):
+  - `G` has unit `m³·kg⁻¹·s⁻²` (not `m³·kg⁻¹·s²`)
+  - `R` has unit `J·mol⁻¹·K⁻¹` (not `J·mol⁻¹·K¹`)
+  - `σ` has unit `W·m⁻²·K⁻⁴` (not `W·m⁻²·K⁴`)
+  - Guards against parser associativity regressions in `ucon`
+
+- **Decompose associativity roundtrip tests** (3 tests in tier 4):
+  - `m/s*kg` → `m*kg/s` identity
+  - `J/(mol*K)` identity with parenthesized denominator
+  - `mg/kg/day` chained division identity
+
+### Changed
+
+- Minimum `ucon` dependency bumped from `>=1.6.0` to `>=1.6.1a1`
+  - Required for left-to-right parser fix and corrected G, R, σ constant
+    unit strings
+
 ## [0.4.4] - 2026-04-13
 
 ### Fixed
