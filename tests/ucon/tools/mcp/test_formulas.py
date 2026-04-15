@@ -372,6 +372,122 @@ class TestCallFormula:
         assert result.quantity == 10.0
         assert result.unit == "m/s"
 
+    def test_compound_output_simplified_to_named_unit(self):
+        from ucon.tools.mcp.server import call_formula, FormulaResult
+
+        @register_formula("force")
+        @enforce_dimensions
+        def force(
+            mass: Number[Dimension.mass],
+            acceleration: Number[Dimension.acceleration],
+        ) -> Number:
+            return mass * acceleration
+
+        result = call_formula("force", {
+            "mass": {"value": 10, "unit": "kg"},
+            "acceleration": {"value": 9.81, "unit": "m/s^2"},
+        })
+        assert isinstance(result, FormulaResult)
+        assert result.quantity == pytest.approx(98.1)
+        assert result.unit == "N"
+        assert result.dimension == "force"
+
+
+# -----------------------------------------------------------------------------
+# Unit Simplification
+# -----------------------------------------------------------------------------
+
+
+class TestSimplifyFormulaUnit:
+    """Tests for _simplify_formula_unit helper."""
+
+    def test_plain_unit_unchanged(self):
+        from ucon.tools.mcp.server import _simplify_formula_unit
+        from ucon.units import meter
+
+        result = Number(5.0, meter)
+        assert _simplify_formula_unit(result) is result
+
+    def test_dimensionless_unchanged(self):
+        from ucon.tools.mcp.server import _simplify_formula_unit
+
+        result = Number(3.14)
+        assert _simplify_formula_unit(result) is result
+
+    def test_single_factor_product_unchanged(self):
+        from ucon.core import UnitProduct
+        from ucon.tools.mcp.server import _simplify_formula_unit
+        from ucon.units import meter
+
+        result = Number(10.0, UnitProduct.from_unit(meter))
+        assert _simplify_formula_unit(result) is result
+
+    def test_force_simplifies_to_newton(self):
+        from ucon.tools.mcp.server import _simplify_formula_unit
+        from ucon.units import kilogram, meter, second
+
+        compound = kilogram * meter / (second ** 2)
+        result = Number(9.81, compound)
+        simplified = _simplify_formula_unit(result)
+        assert simplified.unit.shorthand == "N"
+        assert simplified.quantity == 9.81
+
+    def test_energy_simplifies_to_joule(self):
+        from ucon.tools.mcp.server import _simplify_formula_unit
+        from ucon.units import kilogram, meter, second
+
+        compound = kilogram * meter ** 2 / second ** 2
+        result = Number(100.0, compound)
+        simplified = _simplify_formula_unit(result)
+        assert simplified.unit.shorthand == "J"
+
+    def test_power_simplifies_to_watt(self):
+        from ucon.tools.mcp.server import _simplify_formula_unit
+        from ucon.units import kilogram, meter, second
+
+        compound = kilogram * meter ** 2 / second ** 3
+        result = Number(50.0, compound)
+        simplified = _simplify_formula_unit(result)
+        assert simplified.unit.shorthand == "W"
+
+    def test_pressure_simplifies_to_pascal(self):
+        from ucon.tools.mcp.server import _simplify_formula_unit
+        from ucon.units import kilogram, meter, second
+
+        compound = kilogram / (meter * second ** 2)
+        result = Number(101325.0, compound)
+        simplified = _simplify_formula_unit(result)
+        assert simplified.unit.shorthand == "Pa"
+
+    def test_voltage_simplifies_to_volt(self):
+        from ucon.tools.mcp.server import _simplify_formula_unit
+        from ucon.units import kilogram, meter, second, ampere
+
+        compound = kilogram * meter ** 2 / (ampere * second ** 3)
+        result = Number(12.0, compound)
+        simplified = _simplify_formula_unit(result)
+        assert simplified.unit.shorthand == "V"
+
+    def test_uncertainty_preserved(self):
+        from ucon.tools.mcp.server import _simplify_formula_unit
+        from ucon.units import kilogram, meter, second
+
+        compound = kilogram * meter / (second ** 2)
+        result = Number(9.81, compound, uncertainty=0.01)
+        simplified = _simplify_formula_unit(result)
+        assert simplified.unit.shorthand == "N"
+        assert simplified.uncertainty == 0.01
+
+    def test_velocity_not_simplified(self):
+        """m/s has no single named SI unit — should stay compound."""
+        from ucon.tools.mcp.server import _simplify_formula_unit
+        from ucon.units import meter, second
+
+        compound = meter / second
+        result = Number(10.0, compound)
+        simplified = _simplify_formula_unit(result)
+        assert simplified.unit.shorthand == "m/s"
+
 
 # -----------------------------------------------------------------------------
 # Schema Edge Cases
