@@ -485,14 +485,14 @@ class TestCallFormulaCrossBasis:
         # 0.5 * 0.5 kg * 100 m²/s² = 25 J
         assert result.quantity == pytest.approx(25.0)
 
-    def test_cgs_basis_unit_passes_validation_but_fails_arithmetic(self):
-        """dyne is CGS-basis — passes @enforce_dimensions but to_base()
-        stays in CGS, so multiplying CGS force × SI length raises."""
-        from ucon.tools.mcp.server import call_formula, FormulaError
+    def test_cgs_basis_unit_coerced_to_si(self):
+        """dyne is CGS-basis — coerced to newton by @enforce_dimensions,
+        so cross-basis arithmetic succeeds."""
+        from ucon.tools.mcp.server import call_formula, FormulaResult
 
-        @register_formula("cross_basis_trap")
+        @register_formula("cross_basis_work")
         @enforce_dimensions
-        def cross_basis_trap(
+        def cross_basis_work(
             force: Number[Dimension.force],
             distance: Number[Dimension.length],
         ) -> Number:
@@ -500,12 +500,13 @@ class TestCallFormulaCrossBasis:
             distance = distance.to_base()
             return force * distance
 
-        result = call_formula("cross_basis_trap", {
+        result = call_formula("cross_basis_work", {
             "force": {"value": 1.0, "unit": "dyn"},
             "distance": {"value": 1.0, "unit": "m"},
         })
-        assert isinstance(result, FormulaError)
-        assert result.error_type == "dimension_mismatch"
+        assert isinstance(result, FormulaResult)
+        # 1 dyn = 1e-5 N, so work = 1e-5 N·m
+        assert result.quantity == pytest.approx(1e-5)
 
 
 # -----------------------------------------------------------------------------
