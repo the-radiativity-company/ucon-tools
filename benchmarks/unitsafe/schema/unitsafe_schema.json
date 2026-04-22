@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://ucon.dev/unitsafe/v2/problem.schema.json",
+  "$id": "https://ucon.dev/unitsafe/problem.schema.json",
   "title": "UnitSafe Problem",
   "description": "A single problem in the UnitSafe benchmark for evaluating metrological reasoning in AI models.",
   "type": "object",
