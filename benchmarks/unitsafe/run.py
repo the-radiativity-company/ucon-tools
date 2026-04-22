@@ -245,6 +245,66 @@ class OllamaBackend:
         return Message(text=text, tool_calls=tool_calls)
 
 
+class ClaudeCodeBackend:
+    """Wraps the ``claude`` CLI via subprocess for users with a Claude Code subscription."""
+
+    def __init__(self, model: str | None = None):
+        self.model = model  # None → use CLI default
+
+    async def preflight(self) -> None:
+        """Verify the claude CLI is installed and responsive."""
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "--version",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"'claude' CLI not found or not working: {stderr.decode().strip()}"
+            )
+
+    async def generate(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        system: str | None = None,
+    ) -> Message:
+        # Build the prompt from messages — claude -p takes a single text prompt
+        parts: list[str] = []
+        if system:
+            parts.append(system)
+        for m in messages:
+            content = m.get("content", "")
+            if isinstance(content, list):
+                # Flatten content blocks
+                content = "\n".join(
+                    b.get("text", "") for b in content if isinstance(b, dict)
+                )
+            if content:
+                parts.append(content)
+
+        prompt = "\n\n".join(parts)
+
+        cmd = ["claude", "-p", prompt, "--output-format", "text"]
+        if self.model:
+            cmd.extend(["--model", self.model])
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            err = stderr.decode().strip()
+            return Message(text=f"[claude-code error: {err}]")
+
+        return Message(text=stdout.decode().strip())
+
+
 def _to_ollama_tools(
     claude_tools: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -263,21 +323,30 @@ def _to_ollama_tools(
 
 
 def make_backend(spec: str) -> ModelBackend:
-    """Parse a ``backend:model`` spec and return the corresponding backend."""
+    """Parse a ``backend:model`` spec and return the corresponding backend.
+
+    Specs use ``backend:model`` format.  For ``claude-code``, the model
+    portion is optional (uses CLI default when omitted).
+    """
     backend, _, model = spec.partition(":")
+    backend = backend.lower()
+
+    if backend == "claude-code":
+        return ClaudeCodeBackend(model or None)
+
     if not model:
         raise ValueError(
             f"Invalid model spec {spec!r} — expected 'backend:model' "
-            "(e.g. 'claude:claude-haiku-4-5-20251001' or 'ollama:llama3.2:3b')"
+            "(e.g. 'claude:claude-haiku-4-5-20251001', 'ollama:llama3.2:3b', "
+            "or 'claude-code' / 'claude-code:claude-sonnet-4-20250514')"
         )
-    backend = backend.lower()
     if backend == "claude":
         return ClaudeBackend(model)
     elif backend == "ollama":
         return OllamaBackend(model)
     else:
         raise ValueError(
-            f"Unknown backend {backend!r} — supported: claude, ollama"
+            f"Unknown backend {backend!r} — supported: claude, claude-code, ollama"
         )
 
 
