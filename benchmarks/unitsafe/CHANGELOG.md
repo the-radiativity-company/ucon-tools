@@ -5,7 +5,9 @@ All notable changes to the UnitSafe benchmark will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - 2026-04-22
+## [Unreleased]
+
+## [0.1.0] - 2026-04-23
 
 Initial public release.
 
@@ -21,3 +23,16 @@ Initial public release.
 - HuggingFace dataset card (`README.md`) with loading examples,
   evaluation protocol, and recommended metrics
 - CI workflow for schema validation and HuggingFace publishing
+- Benchmark runner (`run.py`) for evaluating models on UnitSafe problems
+- Claude, Ollama, and Claude Code model backends via `backend:model`
+  CLI spec
+- Format-agnostic judge model for structured answer extraction
+- Optional MCP tool-augmented evaluation (`--tools`, `--mcp-url`)
+- Scoring: numerical tolerance, unit normalisation, refusal detection
+- Filtering by difficulty tier, domain, KOQ cluster, and must-fail status
+- Concurrent evaluation with configurable parallelism (`-j`)
+- Summary metrics: overall/conversion/refusal accuracy, KOQ discrimination
+  score, per-tier and per-cluster breakdowns
+
+[Unreleased]: https://github.com/withtwoemms/ucon-tools/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/withtwoemms/ucon-tools/releases/tag/v0.1.0
