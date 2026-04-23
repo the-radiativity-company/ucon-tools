@@ -8,7 +8,7 @@
 # ucon-tools
 
 [![tests](https://github.com/withtwoemms/ucon-tools/workflows/tests/badge.svg)](https://github.com/withtwoemms/ucon-tools/actions?query=workflow%3Atests)
-[![codecov](https://codecov.io/gh/withtwoemms/ucon-tools/graph/badge.svg?token=HDKWKAF7PX)](https://codecov.io/gh/withtwoemms/ucon-tools)
+[![codecov](https://codecov.io/github/the-radiativity-company/ucon-tools/graph/badge.svg?token=HDKWKAF7PX)](https://codecov.io/github/the-radiativity-company/ucon-tools)
 [![publish](https://github.com/withtwoemms/ucon-tools/workflows/publish/badge.svg)](https://github.com/withtwoemms/ucon-tools/actions?query=workflow%3Apublish)
 
    </td>
