@@ -1,0 +1,94 @@
+name: publish-unitsafe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'benchmarks/unitsafe/**'
+
+  workflow_dispatch:   # manual trigger for initial upload or re-sync
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # need parent commit to detect VERSION changes
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(cat benchmarks/unitsafe/VERSION | tr -d '[:space:]')
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "UnitSafe version: $VERSION"
+
+      - name: Require VERSION bump when data or schema changes
+        if: github.event_name == 'push'
+        run: |
+          if git diff HEAD~1 --name-only | grep -qE '^benchmarks/unitsafe/(data|schema)/'; then
+            if ! git diff HEAD~1 --name-only | grep -q '^benchmarks/unitsafe/VERSION$'; then
+              echo "::error::Data or schema changed without a VERSION bump in benchmarks/unitsafe/VERSION"
+              exit 1
+            fi
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install jsonschema huggingface_hub
+
+      - name: Validate JSONL against schema
+        run: |
+          python - <<'PYEOF'
+          import json, sys
+          from jsonschema import validate, ValidationError
+
+          with open("benchmarks/unitsafe/schema/unitsafe_schema.json") as f:
+              schema = json.load(f)
+
+          errors = 0
+          with open("benchmarks/unitsafe/data/test.jsonl") as f:
+              for i, line in enumerate(f, 1):
+                  try:
+                      obj = json.loads(line)
+                      validate(instance=obj, schema=schema)
+                  except (json.JSONDecodeError, ValidationError) as e:
+                      print(f"::error::Line {i}: {e.message if hasattr(e, 'message') else e}")
+                      errors += 1
+
+          print(f"Validated {i} problems, {errors} errors")
+          if errors:
+              sys.exit(1)
+          PYEOF
+
+      - name: Publish to Hugging Face Hub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          python - <<'PYEOF'
+          from huggingface_hub import HfApi
+
+          version = "${{ steps.version.outputs.value }}"
+
+          api = HfApi()
+          api.upload_folder(
+              folder_path="benchmarks/unitsafe",
+              repo_id="radiativity/UnitSafe",
+              repo_type="dataset",
+              commit_message=f"UnitSafe v{version} (ucon-tools @ ${{ github.sha }})",
+          )
+          api.create_tag(
+              repo_id="radiativity/UnitSafe",
+              repo_type="dataset",
+              tag=f"v{version}",
+              tag_message=f"UnitSafe v{version}",
+              exist_ok=True,
+          )
+          print(f"Published and tagged v{version}")
+          PYEOF
