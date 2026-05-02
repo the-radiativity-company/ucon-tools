@@ -6,6 +6,10 @@ reasoning benchmark.  Supports Claude and Ollama backends, a configurable
 judge model for format-agnostic answer extraction, and optional MCP
 tool-augmented evaluation.
 
+When ``--tools`` is used without ``--judge``, answers are extracted directly
+from MCP tool results (``convert``/``compute`` output) instead of a judge
+model, eliminating judge-induced scoring noise.
+
 Usage examples
 --------------
 # Bare Claude evaluation
@@ -14,8 +18,11 @@ python run.py -m claude:claude-sonnet-4-20250514
 # Ollama model evaluated, Claude as judge
 python run.py -m ollama:llama3.2:3b --judge claude:claude-haiku-4-5-20251001
 
-# Tool-augmented, remote MCP server
-python run.py -m claude:claude-haiku-4-5-20251001 --tools --mcp-url https://mcp.ucon.dev/mcp/inst_abc/mcp
+# Tool-augmented with judge
+python run.py -m claude:claude-haiku-4-5-20251001 --tools --judge claude:claude-haiku-4-5-20251001
+
+# Tool-augmented without judge (tool extraction)
+python run.py -m claude:claude-haiku-4-5-20251001 --tools
 
 # Quick 10-problem smoke test
 python run.py -m claude:claude-haiku-4-5-20251001 --tools --limit 10
@@ -712,6 +719,102 @@ After receiving tool results, present your final answer clearly.\
 
 
 # ---------------------------------------------------------------------------
+# Tool-based extraction (judge-free mode)
+# ---------------------------------------------------------------------------
+
+_ANSWER_TOOLS = {"convert", "compute"}
+
+_REFUSAL_KEYWORDS = re.compile(
+    r"cannot\s+(?:be\s+)?convert|not\s+compatible|impossible|"
+    r"dimensionally\s+incompatible|cannot\s+compare|"
+    r"not\s+(?:a\s+)?valid|invalid\s+conversion|"
+    r"refuse|not\s+possible|incompatible\s+dimensions|"
+    r"different\s+(?:physical\s+)?quantit",
+    re.IGNORECASE,
+)
+
+# Matches a number (with optional sign, scientific notation) followed by a
+# unit-like token.  Captures (number, unit).
+_NUMBER_UNIT_RE = re.compile(
+    r"(?:=\s*|is\s+|:\s*|\*\*)"
+    r"(-?[\d][\d,]*\.?\d*(?:[eE][+-]?\d+)?)"
+    r"\s+"
+    r"([A-Za-z\u00b0\u00b2\u00b3\u2070-\u209f][A-Za-z0-9\u00b0\u00b2\u00b3\u2070-\u209f·*^/()-]*)"
+)
+
+
+def _extract_from_tools(
+    tool_log: list[dict[str, Any]],
+    final_text: str,
+) -> Extraction:
+    """Extract a structured answer from tool results and model text.
+
+    Used in judge-free mode (``--tools`` without ``--judge``).
+    """
+    value: float | None = None
+    unit: str | None = None
+    refused = False
+
+    # -- Value/unit: last successful convert or compute result ---------------
+    for entry in reversed(tool_log):
+        if entry.get("tool") not in _ANSWER_TOOLS:
+            continue
+        if entry.get("is_error"):
+            continue
+        try:
+            result = json.loads(entry["result"]) if isinstance(entry["result"], str) else entry["result"]
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if "error" in result:
+            continue
+        q = result.get("quantity")
+        u = result.get("unit")
+        if q is not None:
+            value = float(q)
+            unit = u
+            break
+
+    # -- Refusal detection ---------------------------------------------------
+    # Signal 1: check_dimensions returned compatible=false
+    has_dim_incompatible = False
+    has_tool_error = False
+    for entry in tool_log:
+        try:
+            result = json.loads(entry["result"]) if isinstance(entry["result"], str) else entry["result"]
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if entry.get("tool") == "check_dimensions" and result.get("compatible") is False:
+            has_dim_incompatible = True
+        if "error" in result:
+            has_tool_error = True
+
+    # Signal 2: refusal language in model text
+    has_refusal_text = bool(_REFUSAL_KEYWORDS.search(final_text)) if final_text else False
+
+    # Combine: refuse if keywords present and no successful numeric answer,
+    # or if dimensions flagged incompatible and no successful answer.
+    if value is None and (has_refusal_text or has_dim_incompatible):
+        refused = True
+    elif has_refusal_text and has_dim_incompatible and value is not None:
+        # Model got a tool result but also expressed doubt — trust the text
+        refused = True
+        value = None
+        unit = None
+
+    # -- Regex fallback for value/unit when no tool result -------------------
+    if value is None and not refused and final_text:
+        m = _NUMBER_UNIT_RE.search(final_text)
+        if m:
+            try:
+                value = float(m.group(1).replace(",", ""))
+                unit = m.group(2).rstrip(".,;:)")
+            except ValueError:
+                pass
+
+    return Extraction(value=value, unit=unit, refused=refused)
+
+
+# ---------------------------------------------------------------------------
 # Judge — extracts structured answers from free-text model output
 # ---------------------------------------------------------------------------
 
@@ -1024,7 +1127,7 @@ class Evaluator:
     def __init__(
         self,
         backend: ModelBackend,
-        judge: Judge,
+        judge: Judge | None = None,
         *,
         mcp_bridge: MCPToolBridge | None = None,
         max_tool_rounds: int = 10,
@@ -1177,9 +1280,13 @@ class Evaluator:
 
             _say("Waiting for model response...")
 
-        # Judge extracts structured answer
-        _say("Extracting answer from response...")
-        extraction = await self.judge.extract(final_text) if final_text else Extraction()
+        # Extract structured answer
+        if self.judge is not None:
+            _say("Extracting answer via judge...")
+            extraction = await self.judge.extract(final_text) if final_text else Extraction()
+        else:
+            _say("Extracting answer from tool results...")
+            extraction = _extract_from_tools(tool_log, final_text)
         return final_text, extraction, tool_log
 
 
@@ -1556,7 +1663,9 @@ async def async_main(args: argparse.Namespace) -> None:
         _say("No problems matched the given filters.")
         sys.exit(0)
 
-    judge_spec = args.judge or args.model
+    # Judge is optional when tools are enabled (extract from tool results)
+    use_judge = args.judge is not None or not args.tools
+    judge_spec = (args.judge or args.model) if use_judge else None
     condition = "tool-augmented" if args.tools else "bare"
 
     # Header
@@ -1565,7 +1674,7 @@ async def async_main(args: argparse.Namespace) -> None:
     _say("UnitSafe Benchmark Runner")
     _say("=" * 60)
     _say(f"  Model:       {args.model}")
-    _say(f"  Judge:       {judge_spec}")
+    _say(f"  Judge:       {judge_spec or 'none (tool extraction)'}")
     _say(f"  Mode:        {condition}")
     _say(f"  Problems:    {len(problems)}")
     _say(f"  Concurrency: {args.j}")
@@ -1581,15 +1690,17 @@ async def async_main(args: argparse.Namespace) -> None:
         args.model, num_ctx=args.num_ctx, show_thinking=args.show_thinking,
         think=not args.no_think,
     )
-    judge_backend = make_backend(judge_spec, num_ctx=args.num_ctx)
-    judge = Judge(judge_backend)
+    judge: Judge | None = None
+    if use_judge:
+        judge_backend = make_backend(judge_spec, num_ctx=args.num_ctx)
+        judge = Judge(judge_backend)
 
     # Preflight — verify backends are reachable before starting eval
     _say("Checking connectivity...")
     preflight_targets: list[tuple[str, str, Any]] = [
         ("Model", args.model, model_backend),
     ]
-    if judge_spec != args.model:
+    if use_judge and judge_spec != args.model:
         preflight_targets.append(("Judge", judge_spec, judge_backend))
     for label, spec, backend in preflight_targets:
         _say(f"  {label} ({spec})...")
