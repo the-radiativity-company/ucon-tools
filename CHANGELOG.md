@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.7] - 2026-05-06
+
+### Added
+
+- **`extend_basis` Phase 2 — session-scoped dimensions are real.** The
+  session-aware dimension adapter introduced as non-functional groundwork
+  in 0.4.6 is now wired through the tool surface. `extend_basis` graduates
+  from informational-only to creating ucon `Basis` and `Dimension` objects
+  that participate in the rest of the MCP toolchain for the lifetime of
+  the session. Each `additional_components[*]` entry materializes a
+  runtime `Dimension` that downstream tools can resolve by name or symbol.
+  Components are surfaced through eight call sites that previously hard-
+  coded the SI seven:
+  - `define_unit` — accepts session dimensions; bypasses `UnitDef`
+    materialization and constructs `Unit` directly when the dimension
+    came from an extended basis
+  - `list_units(dimension=...)` — filter validates against
+    built-in ∪ session dimensions
+  - `list_dimensions()` — now session-scoped; takes optional `Context`
+    and includes dimensions created via `extend_basis`
+  - `define_quantity_kind` — dimension parsing is session-aware, so KOQs
+    can be declared over extended-basis dimensions
+  - `list_quantity_kinds(dimension=...)` — filter is session-aware
+  - `_parse_dimension_to_vector` and `_normalize_dimension_vector` —
+    accept extended-basis symbols and append them after the SI canonical
+    block in declaration order
+  - `build_unknown_dimension_error` — suggestion pool includes session
+    dimensions, so typos resolve against extended bases too
+  - `_get_dimension_vector` — second pass over basis components beyond
+    the SI seven so signatures render their full extended shape
+
+- **Dimension parser papercuts closed.** `_parse_dimension_to_vector` now
+  accepts forms previously rejected:
+  - bare base symbols (`"M"`, `"L"`, and any extended symbol)
+  - compound expressions (`"mass/time"`, `"mass*length/time^2"`)
+  - dimensionless aliases (`""`, `"1"`, `"dimensionless"`)
+  - `luminous_intensity` as a synonym for `luminosity`
+  - `information` (mapped to `B`, the built-in SI extension)
+
+- `tests/ucon/tools/mcp/test_extended_basis_dimensions.py` — 348-line
+  fixture suite covering session-dimension registration, KOQ declaration
+  over extended bases, suggestion-pool behaviour for unknown extended
+  dimensions, dimension-parser acceptance of bare symbols and compound
+  expressions, and signature rendering for components beyond the SI seven
+
+### Changed
+
+- `ExtendedBasisInfo` records carry `runtime_basis: Basis` and
+  `runtime_dimensions: tuple[Dimension, ...]` fields, promoting the
+  metadata record to a bridge between MCP-level descriptions and ucon-core
+  basis/dimension objects. The `(Phase 1: informational only)` qualifier
+  is removed from `extend_basis` response messages; the message now lists
+  the new dimension names that became available.
+- `_format_exponent(symbol, exp)` consolidates the unicode superscript
+  branching that previously appeared inline in three call sites; symbol-
+  agnostic so any extended-basis symbol renders correctly.
+- ucon dependency lower bound: `ucon>=1.6.4a1` → `ucon>=1.6.5`.
+
+### Fixed
+
+- `_normalize_dimension_vector` previously hardcoded the SI symbol regex
+  `[MLTIΘNJ]`, silently dropping extended-basis symbols when normalizing
+  vector strings. The symbol set is now drawn from the session's
+  registered bases with longer-symbol-first matching to disambiguate
+  multi-character extended symbols from the SI seven.
+
 ## [0.4.6] - 2026-05-04
 
 ### Added
