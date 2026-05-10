@@ -14,7 +14,6 @@ import math
 import pytest
 
 from ucon import Dimension, Number, units
-from ucon.units import get_unit_by_name
 from ucon.tools.mcp.formulas import list_formulas, get_formula
 from ucon.tools.mcp.server import call_formula, FormulaResult, FormulaError
 

@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from ucon import Dimension, get_default_graph
 from ucon.dimension import all_dimensions
 from ucon.core import Number, Scale, Unit, UnitProduct
-from ucon.units import get_unit_by_name
+from ucon import parse_unit
 from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_graph
 from ucon.maps import LinearMap
 from ucon.tools.mcp.formulas import list_formulas as _list_formulas, get_formula
@@ -2596,7 +2596,7 @@ def call_formula(
         if unit_str:
             # Parse the unit
             try:
-                unit = get_unit_by_name(unit_str)
+                unit = parse_unit(unit_str)
             except Exception as e:
                 return FormulaError(
                     error=f"Unknown unit '{unit_str}' for parameter '{param_name}'",

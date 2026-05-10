@@ -6,12 +6,12 @@
 from ucon import Dimension, Number, enforce_dimensions
 from ucon import units
 from ucon.constants import standard_gravity
-from ucon.units import get_unit_by_name
+from ucon import parse_unit
 from ucon.tools.mcp.formulas._registry import register_formula
 
 _kg_per_m3 = units.kilogram / units.meter ** 3
 _m_per_s = units.meter / units.second
-_Pa_s = get_unit_by_name('Pa') * units.second
+_Pa_s = parse_unit('Pa') * units.second
 g0 = standard_gravity.as_number()
 
 

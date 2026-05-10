@@ -1301,9 +1301,9 @@ def score_problem(
     # bare Unit objects have an implicit scale of 1.
     if not score_unit and not score_numerical and extraction.unit and extraction.value is not None:
         try:
-            from ucon.units import get_unit_by_name
-            u_exp = get_unit_by_name(expected_unit)
-            u_pred = get_unit_by_name(extraction.unit)
+            from ucon import parse_unit
+            u_exp = parse_unit(expected_unit)
+            u_pred = parse_unit(extraction.unit)
             if u_exp.dimension == u_pred.dimension:
                 score_unit = True
                 s_pred = u_pred.fold_scale() if hasattr(u_pred, "fold_scale") else 1.0

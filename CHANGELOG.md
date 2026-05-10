@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Bumped minimum `ucon` to 1.7.0.** Picks up the value-keyed
+  `Dimension` algebra cache fix that resolves the Python 3.13 id-reuse
+  hazard in `parse_dimension`.
+- **Migrated off the deprecated `get_unit_by_name` symbol.** All eight
+  call sites across `server.py`, `suggestions.py`, `formulas/medical.py`,
+  `formulas/engineering.py`, `tests/.../test_builtin_formulas.py`, and
+  `benchmarks/unitsafe/run.py` now import `parse_unit` from `ucon`.
+  Behaviour is unchanged — `parse_unit` is the new name for the existing
+  `get_unit_by_name` callable, which is scheduled for removal in
+  ucon v2.0.
+
 ## [0.4.7] - 2026-05-06
 
 ### Added

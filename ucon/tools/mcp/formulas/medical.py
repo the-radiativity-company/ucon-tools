@@ -5,10 +5,10 @@
 
 from ucon import Dimension, Number, enforce_dimensions
 from ucon import units
-from ucon.units import get_unit_by_name
+from ucon import parse_unit
 from ucon.tools.mcp.formulas._registry import register_formula
 
-_centimeter = get_unit_by_name('cm')
+_centimeter = parse_unit('cm')
 
 
 @register_formula("bmi", description="Body Mass Index")
@@ -48,11 +48,11 @@ def creatinine_clearance(
     age_yr = age.to(units.year).quantity
     mass_kg = mass.to(units.kilogram).quantity
     scr_mg_dl = serum_creatinine.to(
-        get_unit_by_name('mg') / get_unit_by_name('dL')
+        parse_unit('mg') / parse_unit('dL')
     ).quantity
     female_factor = 0.85 if is_female.quantity else 1.0
     result = ((140 - age_yr) * mass_kg) / (72 * scr_mg_dl) * female_factor
-    return Number(result, get_unit_by_name('mL') / units.minute)
+    return Number(result, parse_unit('mL') / units.minute)
 
 
 @register_formula("fib4", description="FIB-4 liver fibrosis score")

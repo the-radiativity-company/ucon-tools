@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from ucon import get_unit_by_name
+from ucon import parse_unit
 from ucon.parsing import ParseError
 from ucon.units import UnknownUnitError
 
@@ -253,7 +253,7 @@ def resolve_unit(
         On failure: (None, ConversionError)
     """
     try:
-        return get_unit_by_name(name), None
+        return parse_unit(name), None
     except UnknownUnitError:
         return None, build_unknown_unit_error(name, parameter=parameter, step=step)
     except ParseError as e:
