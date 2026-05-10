@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   system prompt are now applied automatically when `--tools` is present
 - `_TOOLS_SYSTEM` prompt composed from tool-use instructions and
   `_ANSWER_SYSTEM` format directive
+- Migrated `run.py` off the deprecated `get_unit_by_name` symbol; the
+  inline import in the unit-rescore branch now reads
+  `from ucon import parse_unit` and the two call sites use `parse_unit`.
+  Aligns with the ucon-tools 0.4.8 bump to `ucon>=1.7.0`; behaviour
+  unchanged.
 
 ## [0.1.1] - 2026-04-23
 
