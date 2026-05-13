@@ -18,6 +18,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ucon.graph import get_default_graph
+from ucon.tools.mcp.formulas import list_formulas
+from ucon.tools.mcp.system.catalog import DEFAULT_CATALOG
+
 if TYPE_CHECKING:
     from ucon.graph import ConversionGraph
 
@@ -41,9 +45,9 @@ class ProcessBase:
         Names of registered domain formulas. Mirrors the formula registry
         at process-startup snapshot time.
     catalog : Any
-        The `BundleCatalog` (Protocol) of known bundles. Typed as `Any` in
-        v0.5.0's Step 2 to keep this module free of Step-4 dependencies;
-        Step 4 ships `BundleCatalog` and `DEFAULT_CATALOG`.
+        The `BundleCatalog` (Protocol) of known bundles. Typed as `Any`
+        because `BundleCatalog` is a Protocol — any structurally
+        conforming object is accepted; `DEFAULT_CATALOG` is the default.
     """
 
     unit_system: "ConversionGraph"
@@ -75,12 +79,13 @@ class ProcessBase:
         method has no side effects; it produces a fresh frozen value.
         """
         if unit_system is None:
-            from ucon.graph import get_default_graph
             unit_system = get_default_graph()
         if tools is None:
             tools = _discover_registered_tools()
         if formulas is None:
             formulas = _discover_registered_formulas()
+        if catalog is None:
+            catalog = DEFAULT_CATALOG
         return cls(
             unit_system=unit_system,
             tools=tools,
@@ -109,5 +114,4 @@ def _discover_registered_tools() -> frozenset[str]:
 
 def _discover_registered_formulas() -> frozenset[str]:
     """Names of formulas registered via `@register_formula`."""
-    from ucon.tools.mcp.formulas import list_formulas
     return frozenset(info.name for info in list_formulas())

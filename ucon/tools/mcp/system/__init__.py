@@ -19,6 +19,30 @@ v0.5.0 ships incrementally; later steps extend this package.
 """
 from __future__ import annotations
 
+from ucon.tools.mcp.system.audit import (
+    AuditRecord,
+    AuditSink,
+    CollectingSink,
+    StderrJsonSink,
+)
+from ucon.tools.mcp.system.clock import Clock, FixedClock, SystemClock
+from ucon.tools.mcp.system.catalog import (
+    BundleCatalog,
+    BundleNotFound,
+    BundleVersionNotFound,
+    CORE_BUNDLE,
+    DEFAULT_CATALOG,
+    StaticCatalog,
+)
+from ucon.tools.mcp.system.operator import (
+    CapabilityTierError,
+    activate_bundle,
+    deactivate_bundle,
+)
+from ucon.tools.mcp.system.operator_state import (
+    BundleVersionMismatch,
+    OperatorState,
+)
 from ucon.tools.mcp.system.process_base import ProcessBase
 from ucon.tools.mcp.system.value_types import (
     ActiveBundle,
@@ -33,12 +57,30 @@ from ucon.tools.mcp.system.value_types import (
 
 __all__ = [
     "ActiveBundle",
+    "AuditRecord",
+    "AuditSink",
+    "BundleCatalog",
+    "BundleNotFound",
+    "BundleVersionMismatch",
+    "BundleVersionNotFound",
+    "CORE_BUNDLE",
     "CallerIdentity",
     "CapabilityBundle",
+    "CapabilityTierError",
+    "Clock",
+    "CollectingSink",
+    "DEFAULT_CATALOG",
     "EffectiveCapabilities",
+    "FixedClock",
+    "OperatorState",
     "PREVIEW",
     "ProcessBase",
     "STANDARD",
+    "StaticCatalog",
+    "StderrJsonSink",
+    "SystemClock",
     "TIER_CONFIGS",
     "TierConfig",
+    "activate_bundle",
+    "deactivate_bundle",
 ]
