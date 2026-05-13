@@ -19,7 +19,7 @@ from ucon import Dimension, get_default_graph
 from ucon.dimension import all_dimensions
 from ucon.core import Number, Scale, Unit, UnitProduct
 from ucon import parse_unit
-from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_graph
+from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_conversion_graph
 from ucon.maps import LinearMap
 from ucon.tools.mcp.formulas import list_formulas as _list_formulas, get_formula
 from ucon.tools.mcp.koq import (
@@ -450,7 +450,7 @@ def convert(
     graph = inline_graph or session_graph
 
     # Perform resolution and conversion within graph context
-    with using_graph(graph):
+    with using_conversion_graph(graph):
         # 1. Parse source unit
         src, err = resolve_unit(from_unit, parameter="from_unit")
         if err:
@@ -628,7 +628,7 @@ def check_dimensions(
     graph = session.get_graph()
 
     # Resolve units within session graph context
-    with using_graph(graph):
+    with using_conversion_graph(graph):
         a, err = resolve_unit(unit_a, parameter="unit_a")
         if err:
             return err
@@ -781,7 +781,7 @@ def compute(
     graph = inline_graph or session_graph
 
     # All unit resolution within graph context
-    with using_graph(graph):
+    with using_conversion_graph(graph):
         # Parse initial unit
         initial_parsed, err = resolve_unit(initial_unit, parameter="initial_unit")
         if err:
@@ -1598,7 +1598,7 @@ def _build_scale_conversion_factor(
     """
     # Get the conversion factor
     try:
-        with using_graph(graph):
+        with using_conversion_graph(graph):
             conv_map = graph.convert(src=src_unit, dst=dst_unit)
 
         if hasattr(conv_map, 'a'):
@@ -1777,7 +1777,7 @@ def _decompose_query_mode(
 
     source_str, target_str = parts[0].strip(), parts[1].strip()
 
-    with using_graph(graph):
+    with using_conversion_graph(graph):
         initial_value = None
         initial_unit_str = source_str
 
@@ -1819,7 +1819,7 @@ def _decompose_query_mode(
 
     if isinstance(source_unit, UnitProduct) or isinstance(target_unit, UnitProduct):
         try:
-            with using_graph(graph):
+            with using_conversion_graph(graph):
                 conv_map = graph.convert(src=source_unit, dst=target_unit)
 
             if hasattr(conv_map, 'a'):
@@ -1855,7 +1855,7 @@ def _decompose_query_mode(
         if path is None:
             # No BFS path found — try graph.convert() which may use bridge edges
             try:
-                with using_graph(graph):
+                with using_conversion_graph(graph):
                     conv_map = graph.convert(src=source_unit, dst=target_unit)
 
                 if hasattr(conv_map, 'a'):
@@ -1915,7 +1915,7 @@ def _decompose_structured_mode(
     4. Uses a constraint solver to determine optimal placement
     5. Adds bridging factors for unit-level mismatches (e.g., mcg→mg, min→h)
     """
-    with using_graph(graph):
+    with using_conversion_graph(graph):
         # Parse initial unit
         initial_parsed, err = resolve_unit(initial_unit_str, parameter="initial_unit")
         if err:
@@ -1948,7 +1948,7 @@ def _decompose_structured_mode(
         value = qty["value"]
         unit_str = qty.get("unit", "ea")
 
-        with using_graph(graph):
+        with using_conversion_graph(graph):
             qty_unit, err = resolve_unit(unit_str, parameter=f"known_quantities[{i}].unit")
             if err:
                 return err
@@ -2268,7 +2268,7 @@ def _compute_bridging_factors(
         denom_str = factor["denominator"]
 
         if num_str != "ea":
-            with using_graph(graph):
+            with using_conversion_graph(graph):
                 num_unit, _ = resolve_unit(num_str, parameter="numerator")
                 if num_unit:
                     _accumulate_factors(accum, num_unit, +1.0)
@@ -2280,7 +2280,7 @@ def _compute_bridging_factors(
             else:
                 denom_unit_str = denom_str
 
-            with using_graph(graph):
+            with using_conversion_graph(graph):
                 denom_unit, _ = resolve_unit(denom_unit_str, parameter="denominator")
                 if denom_unit:
                     _accumulate_factors(accum, denom_unit, -1.0)
@@ -2327,7 +2327,7 @@ def _compute_bridging_factors(
                 paired_dims.add(dim_name)
                 # Compute scale ratio: pos_unit / neg_unit (in base units)
                 try:
-                    with using_graph(graph):
+                    with using_conversion_graph(graph):
                         conv_map = graph.convert(src=pos_uf.unit, dst=neg_uf.unit)
                     if hasattr(conv_map, 'a'):
                         base_scale = float(conv_map.a)
@@ -2372,7 +2372,7 @@ def _compute_bridging_factors(
                     continue  # Same unit — no bridging needed
 
                 try:
-                    with using_graph(graph):
+                    with using_conversion_graph(graph):
                         conv_map = graph.convert(src=cur_uf.unit, dst=tgt_uf.unit)
                     if hasattr(conv_map, 'a'):
                         base_scale = float(conv_map.a)
