@@ -43,6 +43,14 @@ from ucon.tools.mcp.system.operator_state import (
     BundleVersionMismatch,
     OperatorState,
 )
+from ucon.tools.mcp.system.overlay import (
+    OperatorOverlayPolicy,
+    OverlayPolicy,
+    SessionMutationRejected,
+    SessionOverlay,
+    SessionOverlayPolicy,
+    SessionStateOverlay,
+)
 from ucon.tools.mcp.system.process_base import ProcessBase
 from ucon.tools.mcp.system.value_types import (
     ActiveBundle,
@@ -72,10 +80,16 @@ __all__ = [
     "DEFAULT_CATALOG",
     "EffectiveCapabilities",
     "FixedClock",
+    "OperatorOverlayPolicy",
     "OperatorState",
+    "OverlayPolicy",
     "PREVIEW",
     "ProcessBase",
     "STANDARD",
+    "SessionMutationRejected",
+    "SessionOverlay",
+    "SessionOverlayPolicy",
+    "SessionStateOverlay",
     "StaticCatalog",
     "StderrJsonSink",
     "SystemClock",
