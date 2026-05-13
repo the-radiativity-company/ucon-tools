@@ -5,17 +5,9 @@
 ucon.tools.mcp.system
 =====================
 
-Capability framework for v0.5.0: process base, capability bundles, tier
-configuration, operator state, overlay policies.
-
-This module is the authoritative location for the value types and runtime
-state described in:
-
-- `docs/internal/IMPLEMENTATION_PLAN_ucon-tools-v0.5.0.md`
-- `IMPLEMENTATION_PLAN_capability-bundle-composition.md` (seam doc)
-- `IMPLEMENTATION_PLAN_tiered-capability-control.md` (tier plan)
-
-v0.5.0 ships incrementally; later steps extend this package.
+Capability framework: process base, capability bundles, tier
+configuration, operator state, overlay policies, and the tier-driven
+dispatcher.
 """
 from __future__ import annotations
 
@@ -26,6 +18,10 @@ from ucon.tools.mcp.system.audit import (
     StderrJsonSink,
 )
 from ucon.tools.mcp.system.clock import Clock, FixedClock, SystemClock
+from ucon.tools.mcp.system.dispatch import (
+    CapabilityNotAvailable,
+    Dispatcher,
+)
 from ucon.tools.mcp.system.catalog import (
     BundleCatalog,
     BundleNotFound,
@@ -74,10 +70,12 @@ __all__ = [
     "CORE_BUNDLE",
     "CallerIdentity",
     "CapabilityBundle",
+    "CapabilityNotAvailable",
     "CapabilityTierError",
     "Clock",
     "CollectingSink",
     "DEFAULT_CATALOG",
+    "Dispatcher",
     "EffectiveCapabilities",
     "FixedClock",
     "OperatorOverlayPolicy",

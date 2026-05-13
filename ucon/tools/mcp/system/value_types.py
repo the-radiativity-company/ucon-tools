@@ -5,15 +5,10 @@
 ucon.tools.mcp.system.value_types
 =================================
 
-Frozen value types from the seam doc and tier plan: `CapabilityBundle`,
+Frozen value types backing the capability framework: `CapabilityBundle`,
 `ActiveBundle`, `EffectiveCapabilities`, `TierConfig`, `CallerIdentity`.
 
 Pure values. No I/O. No coupling to dispatch, audit, or operator state.
-
-See:
-- `IMPLEMENTATION_PLAN_capability-bundle-composition.md` (seam doc)
-- `IMPLEMENTATION_PLAN_tiered-capability-control.md` (tier plan)
-- `docs/internal/IMPLEMENTATION_PLAN_ucon-tools-v0.5.0.md` (§2, §5)
 """
 from __future__ import annotations
 
@@ -57,8 +52,9 @@ class CapabilityBundle:
         Intrinsic bundle expiry. `None` means no intrinsic expiry; the
         activation lease still bounds the bundle's active lifetime.
     restrictions : tuple[str, ...]
-        Reserved for v2 negative composition (capability denial). Inert
-        in v0.5.0: activation raises `NotImplementedError` if non-empty.
+        Reserved for future negative-composition support (capability
+        denial). Inert today: activation raises `NotImplementedError`
+        if non-empty.
     """
 
     name: str
@@ -110,7 +106,7 @@ class TierConfig:
     `eligible_bundles=None` is the wildcard: every catalog entry is
     eligible. `default_lease=None` / `max_lease=None` mean indefinite
     leases (no clamping). `overlay_policy` is the key into a
-    policy-lookup table populated by the policy module (Step 8).
+    policy-lookup table populated by the policy module.
     """
 
     name: str
@@ -151,10 +147,10 @@ TIER_CONFIGS: Mapping[str, TierConfig] = {
 class CallerIdentity:
     """The identity of a caller making a tool request.
 
-    `roles` is the v0.5.x deferral seam: present on the value type for
-    forward-compat, ignored by v0.5.0 dispatch (every read site uses the
-    tier instead). v0.5.x binds `roles` from authenticated transport
-    claims and consults it in `activate_bundle`-style flows.
+    `roles` is present on the value type for forward-compat but is not
+    consulted by dispatch today (every read site uses the tier). A
+    future release will bind `roles` from authenticated transport
+    claims and consult it in `activate_bundle`-style flows.
     """
 
     tier: str

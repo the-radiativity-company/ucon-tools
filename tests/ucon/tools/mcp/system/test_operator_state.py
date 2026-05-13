@@ -4,7 +4,7 @@
 """
 Tests for `ucon.tools.mcp.system.operator_state.OperatorState`.
 
-Acceptance (per §8.4 of the v0.5.0 plan):
+Invariants under test:
 - Activation places the bundle under (tier, bundle.name).
 - Reap. A bundle with `expires_at <= now` is removed on
   `reap_expired(now)`; the returned tuple includes it.

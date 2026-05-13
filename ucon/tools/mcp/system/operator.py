@@ -8,8 +8,7 @@ ucon.tools.mcp.system.operator
 Operator entry points for bundle activation and deactivation.
 
 `activate_bundle` and `deactivate_bundle` are the in-process operator
-surface for v0.5.0. They layer on top of `OperatorState` (Step 5) and
-add:
+surface. They layer on top of `OperatorState` and add:
 
 - Catalog resolution and version pinning.
 - Tier eligibility checks (`CapabilityTierError`).
@@ -20,10 +19,7 @@ add:
   at activation (`NotImplementedError`).
 
 Audit emission lives here, not inside `OperatorState`, so the storage
-layer stays policy-free (see §7 of the v0.5.0 plan).
-
-See `IMPLEMENTATION_PLAN_tiered-capability-control.md` (§3.6, §4.2)
-and `docs/internal/IMPLEMENTATION_PLAN_ucon-tools-v0.5.0.md` (§7, §8.4).
+layer stays policy-free.
 """
 from __future__ import annotations
 
@@ -118,8 +114,8 @@ def activate_bundle(
     CapabilityTierError
         Bundle not in `tier_config.eligible_bundles`.
     NotImplementedError
-        Bundle declares non-empty `restrictions` (v2-anticipation
-        field; inert until later releases support enforcement).
+        Bundle declares non-empty `restrictions` (reserved for future
+        negative-composition support; inert until that lands).
     """
     bundle = catalog.get(bundle_name, bundle_version)
 
@@ -127,7 +123,7 @@ def activate_bundle(
         raise NotImplementedError(
             f"bundle {bundle_name!r}@{bundle_version!r} declares "
             f"restrictions {bundle.restrictions!r}; restriction "
-            "enforcement is deferred past v0.5.0"
+            "enforcement is not yet implemented"
         )
 
     if (

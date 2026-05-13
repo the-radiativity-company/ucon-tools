@@ -9,10 +9,7 @@ ucon.tools.mcp.system.operator_state
 Thread-safe wrapper around the active set of bundles, keyed by
 `(tier, bundle.name)`. Activation, deactivation, and reaping live here;
 audit emission and version-pinning policy live in the activation entry
-points (Step 7) layered on top.
-
-See `IMPLEMENTATION_PLAN_tiered-capability-control.md` (§3.4) and
-`docs/internal/IMPLEMENTATION_PLAN_ucon-tools-v0.5.0.md` (§7, §8.4).
+points layered on top.
 """
 from __future__ import annotations
 
@@ -29,10 +26,11 @@ class BundleVersionMismatch(ValueError):
 class OperatorState:
     """Thread-safe mutable holder for the set of activated bundles.
 
-    Activation keys `(tier, bundle.name)` to one `ActiveBundle`; activating
-    the same `(tier, name)` again overwrites the prior entry. The Step 7
-    entry points layer above add eligibility checks, lease clamping, and
-    audit emission; this class is intentionally policy-free.
+    Activation keys `(tier, bundle.name)` to one `ActiveBundle`;
+    activating the same `(tier, name)` again overwrites the prior entry.
+    The entry points layered above add eligibility checks, lease
+    clamping, and audit emission; this class is intentionally
+    policy-free.
 
     All public methods acquire the same `RLock`. `active_for` and
     `reap_expired` snapshot the relevant entries inside the lock and

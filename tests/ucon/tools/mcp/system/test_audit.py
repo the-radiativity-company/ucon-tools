@@ -4,13 +4,13 @@
 """
 Tests for `ucon.tools.mcp.system.audit`.
 
-Acceptance (per §8.7 of the v0.5.0 plan):
+Invariants under test:
 - `AuditRecord` JSON-line serialization round-trip.
 - `StderrJsonSink` writes one record per line, flushed.
 - `CollectingSink` captures records in order.
 - All sinks satisfy the `AuditSink` Protocol at runtime.
-- The seam-doc `EffectiveCapabilities.audit` field is distinct from the
-  operator-side `AuditSink`.
+- `EffectiveCapabilities.audit` is distinct from the operator-side
+  `AuditSink`.
 """
 from __future__ import annotations
 

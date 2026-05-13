@@ -4,7 +4,7 @@
 """
 Tests for `ucon.tools.mcp.system.operator` activation entry points.
 
-Acceptance (per §8.4 and §8.7 of the v0.5.0 plan):
+Invariants under test:
 
 - **PREVIEW.** `activate_bundle("core", "1.0", requested_lease=None)` →
   `expires_at = now + 24h`. `requested_lease=14d` → clamped to 7d with

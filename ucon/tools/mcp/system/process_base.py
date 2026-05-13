@@ -9,9 +9,6 @@ ucon.tools.mcp.system.process_base
 MCP server: the base unit system, the advertised tool roster, the registered
 formulas, and the bundle catalog. It is built once at process startup and
 referenced by `OverlayPolicy.resolve(...)` on every request.
-
-See `docs/internal/IMPLEMENTATION_PLAN_ucon-tools-v0.5.0.md` (§2, §6) and
-the seam doc `IMPLEMENTATION_PLAN_capability-bundle-composition.md`.
 """
 from __future__ import annotations
 
@@ -36,8 +33,8 @@ class ProcessBase:
     Attributes
     ----------
     unit_system : ConversionGraph
-        The base conversion graph for the process. In v0.5.0 the substrate
-        is ucon's `ConversionGraph` (the "active unit system" mechanism).
+        The base conversion graph for the process. The substrate is
+        ucon's `ConversionGraph` (the "active unit system" mechanism).
     tools : frozenset[str]
         Names of MCP tools advertised by this process. Dispatch gates each
         request by `request.tool in effective.tools`.
@@ -73,7 +70,7 @@ class ProcessBase:
           module-level `FastMCP` instance in `ucon.tools.mcp.server`.
         - `formulas`: names returned by the formula registry's
           `list_formulas()`.
-        - `catalog`: caller-supplied (Step 4 introduces a default).
+        - `catalog`: defaults to `DEFAULT_CATALOG`.
 
         Any explicit keyword overrides the corresponding default. The
         method has no side effects; it produces a fresh frozen value.

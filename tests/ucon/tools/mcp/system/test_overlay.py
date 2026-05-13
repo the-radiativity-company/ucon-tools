@@ -4,7 +4,7 @@
 """
 Tests for `ucon.tools.mcp.system.overlay`.
 
-Acceptance (per §8.5 of the v0.5.0 plan):
+Invariants under test:
 
 - `SessionOverlayPolicy` produces a mutable session overlay rooted on
   the process base; mutations do not leak across sessions.
@@ -12,9 +12,9 @@ Acceptance (per §8.5 of the v0.5.0 plan):
   with `SessionMutationRejected`.
 - Tools/formulas compose as pointwise unions across base and active
   bundles; audit is a tuple of `(name, version)` per active bundle.
-- v0.5.0 carve-out: non-empty `bundle.unit_packages` or
-  `bundle.constants` raises `NotImplementedError` at resolve time
-  (composition deferred past v0.5.0).
+- Carve-out: non-empty `bundle.unit_packages` or `bundle.constants`
+  raises `NotImplementedError` at resolve time (composition not yet
+  implemented).
 """
 from __future__ import annotations
 
@@ -253,7 +253,7 @@ def test_operator_policy_audit_includes_each_active_bundle():
 
 
 # -----------------------------------------------------------------------------
-# v0.5.0 carve-out: bundle unit-system content rejected
+# Carve-out: bundle unit-system content rejected
 # -----------------------------------------------------------------------------
 
 def test_bundle_with_unit_packages_rejected_by_session_policy():

@@ -5,12 +5,9 @@
 ucon.tools.mcp.system.catalog
 =============================
 
-`BundleCatalog` — the namespace of known bundles. v0.5.0 ships a single
+`BundleCatalog` — the namespace of known bundles. Ships a single
 concrete implementation (`StaticCatalog`) and a single populated catalog
 (`DEFAULT_CATALOG`) containing exactly `CORE_BUNDLE`.
-
-See `IMPLEMENTATION_PLAN_tiered-capability-control.md` (§3.5) and
-`docs/internal/IMPLEMENTATION_PLAN_ucon-tools-v0.5.0.md` (§5, §8.3).
 """
 from __future__ import annotations
 
@@ -32,8 +29,8 @@ class BundleCatalog(Protocol):
     """The namespace of known bundles.
 
     Catalogs are lookup-only: they do not own state, lifetime, or
-    activation. Activation lives in `OperatorState` (Step 5) and is
-    driven through `activate_bundle(...)` (Step 7).
+    activation. Activation lives in `OperatorState` and is driven
+    through `activate_bundle(...)`.
     """
 
     def get(self, name: str, version: str) -> CapabilityBundle:
@@ -75,11 +72,11 @@ class StaticCatalog:
 # Built-in bundle and catalog
 # -----------------------------------------------------------------------------
 
-# The read-only tool roster shipped at v0.5.0. Mutating tools
+# The read-only tool roster shipped in the core bundle. Mutating tools
 # (`define_unit`, `define_conversion`, `define_constant`,
-# `define_quantity_kind`, `extend_basis`, `reset_session`) are deliberately
-# excluded; the v0.5.1 committed scope reintroduces them in split-per-concern
-# bundles.
+# `define_quantity_kind`, `extend_basis`, `reset_session`) are
+# deliberately excluded; future split-per-concern bundles will host
+# them once their composition story is settled.
 _CORE_TOOLS: frozenset[str] = frozenset({
     "convert",
     "compute",
@@ -100,14 +97,14 @@ _CORE_TOOLS: frozenset[str] = frozenset({
 
 # CORE_BUNDLE.formulas is a curated subset of universally applicable
 # formulas. Domain-specific formula sets (aerospace, chemistry, medical,
-# etc.) are reserved for separate bundles in v0.5.x / v0.6.
+# etc.) are reserved for separate bundles.
 _CORE_FORMULAS: frozenset[str] = frozenset({"bmi", "fib4"})
 
 
 CORE_BUNDLE: CapabilityBundle = CapabilityBundle(
     name="core",
     version="1.0",
-    provenance="ucon-tools v0.5.0 built-in",
+    provenance="ucon-tools built-in",
     unit_packages=(),
     constants={},
     tools=_CORE_TOOLS,

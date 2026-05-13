@@ -4,7 +4,7 @@
 """
 Tests for `ucon.tools.mcp.system.catalog`.
 
-Acceptance (per §8.3 of the v0.5.0 plan):
+Invariants under test:
 - `DEFAULT_CATALOG.get("core", "1.0")` returns `CORE_BUNDLE`.
 - `DEFAULT_CATALOG.get("absent", "1.0")` raises `BundleNotFound`.
 - `DEFAULT_CATALOG.get("core", "9.9")` raises `BundleVersionNotFound`.
@@ -96,7 +96,7 @@ def test_static_catalog_is_immutable_post_construction():
 def test_core_bundle_metadata():
     assert CORE_BUNDLE.name == "core"
     assert CORE_BUNDLE.version == "1.0"
-    assert CORE_BUNDLE.provenance == "ucon-tools v0.5.0 built-in"
+    assert CORE_BUNDLE.provenance == "ucon-tools built-in"
     assert CORE_BUNDLE.expires_at is None
     assert CORE_BUNDLE.restrictions == ()
 
@@ -127,7 +127,7 @@ def test_core_bundle_excludes_mutating_tools():
 
 
 def test_core_bundle_contains_expected_read_only_tools():
-    """The read-only tool roster (§5 of plan) must all be present in CORE."""
+    """The read-only tool roster must all be present in CORE."""
     expected = frozenset({
         "convert", "compute", "decompose",
         "list_units", "list_scales", "list_dimensions",

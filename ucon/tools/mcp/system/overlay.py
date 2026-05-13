@@ -5,38 +5,33 @@
 ucon.tools.mcp.system.overlay
 =============================
 
-`OverlayPolicy` and the two v0.5.0 implementations:
+`OverlayPolicy` and two implementations:
 
-- `SessionOverlayPolicy` — STANDARD-tier (Type A). Per-session mutable
-  overlay rooted on the process base.
-- `OperatorOverlayPolicy` — PREVIEW-tier (Type B). Operator bundles
-  compose; session-level mutation rejected.
+- `SessionOverlayPolicy` — STANDARD-tier. Per-session mutable overlay
+  rooted on the process base.
+- `OperatorOverlayPolicy` — PREVIEW-tier. Operator bundles compose;
+  session-level mutation rejected.
 
 Both produce an `EffectiveCapabilities` per request: a frozen value
 joining `unit_system`, `tools`, `formulas`, and `audit` provenance.
 
-v0.5.0 scope
-------------
+Scope today
+-----------
 `CORE_BUNDLE` (the only bundle in `DEFAULT_CATALOG`) has empty
 `unit_packages` and `constants`, so bundle-level *unit-system*
-composition is a no-op in v0.5.0. The policies guard against
-non-empty content with `NotImplementedError` so a future bundle that
-tries to carry unit packages or constants fails loudly rather than
-silently dropping content. The full `_compose_unit_system`/`SystemDelta`
-machinery (seam doc §4–§5) arrives when v0.5.x ships its first
-content-carrying bundle.
+composition is a no-op. The policies guard against non-empty content
+with `NotImplementedError` so a future bundle that tries to carry unit
+packages or constants fails loudly rather than silently dropping
+content. The full `_compose_unit_system`/`SystemDelta` machinery is
+anticipated but not yet implemented.
 
-What v0.5.0 does compose:
+What the policies do compose:
 
 - `tools`: process-base ∪ ⋃ active_bundles.tools
 - `formulas`: process-base ∪ ⋃ active_bundles.formulas
 - `audit`: tuple of `(name, version)` per active bundle
 - `unit_system`: session overlay's graph (STANDARD) or the process
   base (PREVIEW)
-
-See `IMPLEMENTATION_PLAN_capability-bundle-composition.md` (§3.3,
-§3.4, §5) and `docs/internal/IMPLEMENTATION_PLAN_ucon-tools-v0.5.0.md`
-(§7 step 8, §8.5).
 """
 from __future__ import annotations
 
@@ -64,10 +59,10 @@ class SessionOverlay(Protocol):
     """Per-session mutable overlay consumed by `SessionOverlayPolicy`.
 
     `is_empty()` lets `OperatorOverlayPolicy` defensively reject any
-    overlay that actually carries content. In v0.5.0 the overlay's
+    overlay that actually carries content. Today the overlay's
     `get_unit_system()` returns the session's mutable conversion graph
-    directly; the seam doc's `as_system_delta()` materialization
-    arrives with `SystemDelta`/`UnitPackage` in v0.5.x.
+    directly; an `as_system_delta()` materialization is anticipated
+    but not yet implemented.
     """
 
     def is_empty(self) -> bool: ...
@@ -93,19 +88,19 @@ class OverlayPolicy(Protocol):
 def _reject_bundle_unit_system_content(
     active_bundles: Sequence[CapabilityBundle],
 ) -> None:
-    """v0.5.0: bundles must not carry unit-system content.
+    """Bundles must not carry unit-system content.
 
     `unit_packages` and `constants` composition into a `UnitSystem`
-    requires `SystemDelta` / `UnitPackage` machinery deferred past
-    v0.5.0 (seam doc §4). `CORE_BUNDLE` satisfies this; any other
-    bundle declaring content fails loudly at resolve time.
+    requires `SystemDelta` / `UnitPackage` machinery that is not yet
+    implemented. `CORE_BUNDLE` satisfies this; any other bundle
+    declaring content fails loudly at resolve time.
     """
     for b in active_bundles:
         if b.unit_packages or b.constants:
             raise NotImplementedError(
                 f"bundle {b.name!r}@{b.version!r} carries unit-system "
                 "content (unit_packages or constants); composition into "
-                "the base unit system is deferred past v0.5.0"
+                "the base unit system is not yet implemented"
             )
 
 

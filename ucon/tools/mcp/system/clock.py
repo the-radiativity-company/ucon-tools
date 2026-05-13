@@ -6,10 +6,8 @@ ucon.tools.mcp.system.clock
 ===========================
 
 Time abstraction for the capability framework. All wall-clock reads in
-v0.5.0 dispatch and activation flow through `Clock.now()` so tests can
-inject `FixedClock` and production deployments use `SystemClock`.
-
-See `IMPLEMENTATION_PLAN_tiered-capability-control.md` (§3.7).
+dispatch and activation flow through `Clock.now()` so tests can inject
+`FixedClock` and production deployments use `SystemClock`.
 """
 from __future__ import annotations
 
@@ -19,8 +17,10 @@ from typing import Protocol, runtime_checkable
 
 @runtime_checkable
 class Clock(Protocol):
-    """Wall-clock source. v0.5.0 ships `now()` only; v0.5.x may add
-    `monotonic()` for elapsed-time reaping that is robust under NTP step.
+    """Wall-clock source.
+
+    Ships `now()` only; a `monotonic()` for elapsed-time reaping that is
+    robust under NTP step is anticipated but not yet implemented.
     """
 
     def now(self) -> datetime: ...

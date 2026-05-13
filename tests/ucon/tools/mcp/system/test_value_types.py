@@ -215,14 +215,11 @@ def test_caller_identity_is_frozen():
         ci.principal = "y"  # type: ignore[misc]
 
 
-def test_v05_does_not_consult_roles():
-    """The `roles` field is inert in v0.5.0: a `CallerIdentity` with
-    arbitrary roles should be value-equal to one with the same `(tier,
-    principal)` only when roles match; the deferral seam is the
-    presence of the field, not coupling to dispatch behavior here.
-
-    A separate dispatch-layer test asserts that no read site touches
-    `roles`. This test pins the value-type semantics only.
+def test_roles_participate_in_value_equality():
+    """The `roles` field participates in `CallerIdentity` value
+    equality: two identities with the same `(tier, principal)` are
+    equal only when `roles` also match. Whether the dispatcher consults
+    `roles` is a separate concern asserted at the dispatch layer.
     """
     a = CallerIdentity(tier="preview", principal="x")
     b = CallerIdentity(tier="preview", principal="x", roles=frozenset({"any"}))

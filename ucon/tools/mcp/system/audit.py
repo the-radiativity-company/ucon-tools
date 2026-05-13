@@ -9,16 +9,13 @@ ucon.tools.mcp.system.audit
 (`activate_bundle`, `deactivate_bundle`) and the dispatch reaper
 (`reap_expired`).
 
-`AuditSink` — the destination Protocol. v0.5.0 ships `StderrJsonSink`
-(synchronous, JSON-line). v0.5.x will ship a bounded-queue variant.
+`AuditSink` — the destination Protocol. Ships `StderrJsonSink`
+(synchronous, JSON-line); a bounded-queue variant is anticipated.
 
-Distinct from `EffectiveCapabilities.audit` (seam-doc provenance tuple
-attached to a composed value): `AuditSink` emits operator-lifecycle
-events; `EffectiveCapabilities.audit` is the per-request provenance
-trail used by error formatting and introspection.
-
-See `IMPLEMENTATION_PLAN_tiered-capability-control.md` (§3.6, §4.2) and
-`docs/internal/IMPLEMENTATION_PLAN_ucon-tools-v0.5.0.md` (§8.7).
+Distinct from `EffectiveCapabilities.audit` (provenance tuple attached
+to a composed value): `AuditSink` emits operator-lifecycle events;
+`EffectiveCapabilities.audit` is the per-request provenance trail used
+by error formatting and introspection.
 """
 from __future__ import annotations
 
