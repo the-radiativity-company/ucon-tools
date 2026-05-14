@@ -26,20 +26,27 @@ import pytest
 from ucon.graph import get_default_graph, using_conversion_graph
 from ucon.tools.mcp.server import (
     _build_dispatcher,
+    _build_inline_graph,
     _get_dispatcher,
     _get_fallback_dispatcher,
     _reset_fallback_dispatcher,
+    convert,
     dispatched,
     lifespan,
     mcp,
 )
+from ucon.tools.mcp.suggestions import ConversionError
 from ucon.tools.mcp.system import (
     CallerIdentity,
     CapabilityNotAvailable,
     Dispatcher,
     EffectiveCapabilities,
     OperatorOverlayPolicy,
+    OperatorState,
+    ProcessBase,
     SessionOverlayPolicy,
+    StderrJsonSink,
+    SystemClock,
     TIER_CONFIGS,
 )
 
@@ -192,3 +199,97 @@ def test_dispatched_propagates_capability_not_available_with_audit():
         assert exc.tool_name == "definitely_not_a_registered_tool"
         # No bundles active under the fallback dispatcher; audit is empty.
         assert exc.audit == ()
+
+
+# -----------------------------------------------------------------------------
+# convert(...) routes through dispatched(...)
+# -----------------------------------------------------------------------------
+
+def _ctx_with_dispatcher(dispatcher: Dispatcher):
+    """Build a stub `Context` whose lifespan_context exposes a dispatcher."""
+
+    class _LifespanCtx:
+        lifespan_context = {"dispatcher": dispatcher}
+
+    class _Ctx:
+        request_context = _LifespanCtx()
+
+    return _Ctx()
+
+
+def test_convert_raises_capability_not_available_when_tool_gated_off():
+    """If the dispatcher's `ProcessBase.tools` excludes `"convert"`, the
+    tool body must not run — the dispatcher gate raises before any
+    conversion work begins. This proves `convert` consults the
+    dispatcher rather than calling `using_conversion_graph` directly.
+    """
+    locked_down = Dispatcher(
+        process_base=ProcessBase(
+            unit_system=get_default_graph(),
+            tools=frozenset(),  # convert is NOT advertised
+            formulas=frozenset(),
+            catalog=None,
+        ),
+        operator_state=OperatorState(),
+        policies={
+            "session": SessionOverlayPolicy(),
+            "operator": OperatorOverlayPolicy(),
+        },
+        tier_configs=TIER_CONFIGS,
+        clock=SystemClock(),
+        sink=StderrJsonSink(),
+        default_identity=CallerIdentity(tier="standard", principal="test"),
+    )
+    ctx = _ctx_with_dispatcher(locked_down)
+    with pytest.raises(CapabilityNotAvailable) as excinfo:
+        convert(value=1.0, from_unit="m", to_unit="m", ctx=ctx)
+    assert excinfo.value.tool_name == "convert"
+
+
+def test_convert_uses_dispatcher_resolved_unit_system_under_preview_tier():
+    """Under the PREVIEW tier, `eff.unit_system` is sourced from the
+    dispatcher's `ProcessBase` (operator policy; no session overlay).
+    A custom unit registered only on the dispatcher's graph must be
+    reachable from inside `convert`. If the dispatcher path were not
+    taken, the unit would be unknown.
+    """
+    # Build an isolated graph with a custom "smoot" → "m" edge.
+    custom_graph, err = _build_inline_graph(
+        [{"name": "smoot", "dimension": "length", "aliases": ["smoot"]}],
+        [{"src": "smoot", "dst": "m", "factor": 1.7018}],
+        get_default_graph(),
+    )
+    assert err is None
+    assert custom_graph is not None
+
+    preview_dispatcher = Dispatcher(
+        process_base=ProcessBase(
+            unit_system=custom_graph,
+            tools=frozenset({"convert"}),
+            formulas=frozenset(),
+            catalog=None,
+        ),
+        operator_state=OperatorState(),
+        policies={
+            "session": SessionOverlayPolicy(),
+            "operator": OperatorOverlayPolicy(),
+        },
+        tier_configs=TIER_CONFIGS,
+        clock=SystemClock(),
+        sink=StderrJsonSink(),
+        default_identity=CallerIdentity(tier="preview", principal="test"),
+    )
+    ctx = _ctx_with_dispatcher(preview_dispatcher)
+    result = convert(value=1.0, from_unit="smoot", to_unit="m", ctx=ctx)
+    assert not isinstance(result, ConversionError)
+    assert result.quantity == pytest.approx(1.7018, rel=1e-4)
+
+
+def test_convert_default_dispatcher_path_succeeds():
+    """Sanity check: the default (fallback) dispatcher allows `convert`
+    and produces a sensible result. Guards against regression where the
+    dispatched(...) wiring accidentally gates a registered tool off.
+    """
+    result = convert(value=1000.0, from_unit="m", to_unit="km")
+    assert not isinstance(result, ConversionError)
+    assert result.quantity == pytest.approx(1.0)

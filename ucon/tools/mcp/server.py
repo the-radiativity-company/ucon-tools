@@ -546,37 +546,41 @@ def convert(
             custom_units=[{"name": "slug", "dimension": "mass", "aliases": ["slug"]}],
             custom_edges=[{"src": "slug", "dst": "kg", "factor": 14.5939}])
     """
-    session = _get_session(ctx)
-    session_graph = session.get_graph()
+    # Dispatcher resolves the effective unit_system (base + active bundles +
+    # session overlay) and enters it as the ambient graph. Inline definitions
+    # layer on top of that resolved graph for this call only.
+    with dispatched("convert", ctx) as eff:
+        base_graph = eff.unit_system
 
-    # Build inline graph if custom definitions provided
-    inline_graph, err = _build_inline_graph(custom_units, custom_edges, session_graph)
-    if err:
-        return err
-
-    # Use inline graph or session graph
-    graph = inline_graph or session_graph
-
-    # Perform resolution and conversion within graph context
-    with using_conversion_graph(graph):
-        # 1. Parse source unit
-        src, err = resolve_unit(from_unit, parameter="from_unit")
+        # Build inline graph if custom definitions provided
+        inline_graph, err = _build_inline_graph(custom_units, custom_edges, base_graph)
         if err:
             return err
 
-        # 2. Parse target unit
-        dst, err = resolve_unit(to_unit, parameter="to_unit")
-        if err:
-            return err
+        # Use inline graph or the dispatcher-resolved graph
+        graph = inline_graph or base_graph
 
-        # 3. Perform conversion
-        try:
-            num = Number(quantity=value, unit=src)
-            result = num.to(dst, graph=graph)
-        except DimensionMismatch:
-            return build_dimension_mismatch_error(from_unit, to_unit, src, dst)
-        except ConversionNotFound as e:
-            return build_no_path_error(from_unit, to_unit, src, dst, e)
+        # Re-enter as ambient when an inline graph is in play (idempotent
+        # when graph is already the dispatched ambient).
+        with using_conversion_graph(graph):
+            # 1. Parse source unit
+            src, err = resolve_unit(from_unit, parameter="from_unit")
+            if err:
+                return err
+
+            # 2. Parse target unit
+            dst, err = resolve_unit(to_unit, parameter="to_unit")
+            if err:
+                return err
+
+            # 3. Perform conversion
+            try:
+                num = Number(quantity=value, unit=src)
+                result = num.to(dst, graph=graph)
+            except DimensionMismatch:
+                return build_dimension_mismatch_error(from_unit, to_unit, src, dst)
+            except ConversionNotFound as e:
+                return build_no_path_error(from_unit, to_unit, src, dst, e)
 
     # Use the target unit string as output (what the user asked for).
     # This handles cases like mg/kg → µg/kg where internal representation
