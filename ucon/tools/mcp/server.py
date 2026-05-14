@@ -9,8 +9,8 @@
 import hashlib
 import json
 import re
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, AsyncIterator
+from contextlib import asynccontextmanager, contextmanager
+from typing import TYPE_CHECKING, AsyncIterator, Generator
 
 from mcp.server.fastmcp import FastMCP, Context
 from pydantic import BaseModel
@@ -42,13 +42,59 @@ from ucon.tools.mcp.suggestions import (
     build_no_path_error,
     build_unknown_dimension_error,
 )
+from ucon.tools.mcp.system import (
+    CallerIdentity,
+    CapabilityNotAvailable,
+    Dispatcher,
+    EffectiveCapabilities,
+    OperatorOverlayPolicy,
+    OperatorState,
+    ProcessBase,
+    SessionOverlayPolicy,
+    SessionStateOverlay,
+    StderrJsonSink,
+    SystemClock,
+    TIER_CONFIGS,
+)
 from ucon.packages import EdgeDef, PackageLoadError, UnitDef
+
+
+def _build_dispatcher() -> Dispatcher:
+    """Construct the process-wide `Dispatcher`.
+
+    Snapshots the registered tool roster and formula registry at call
+    time (via `ProcessBase.from_globals()`), uses ucon's default graph
+    as the base unit system, and pairs both shipped overlay policies
+    with `TIER_CONFIGS`. The default identity is the standard tier,
+    principal `"local"`; transport-level identity extraction is
+    deliberately out of scope here.
+    """
+    return Dispatcher(
+        process_base=ProcessBase.from_globals(),
+        operator_state=OperatorState(),
+        policies={
+            "session": SessionOverlayPolicy(),
+            "operator": OperatorOverlayPolicy(),
+        },
+        tier_configs=TIER_CONFIGS,
+        clock=SystemClock(),
+        sink=StderrJsonSink(),
+        default_identity=CallerIdentity(tier="standard", principal="local"),
+    )
 
 
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
-    """Server lifespan - creates session state that persists across tool calls."""
-    yield {"session": DefaultSessionState()}
+    """Server lifespan - creates per-process state shared across tool calls.
+
+    Yields a dict containing:
+    - ``"session"``: a `DefaultSessionState` for per-server mutable session state.
+    - ``"dispatcher"``: the process-wide tier-driven `Dispatcher`.
+    """
+    yield {
+        "session": DefaultSessionState(),
+        "dispatcher": _build_dispatcher(),
+    }
 
 
 mcp = FastMCP("ucon", lifespan=lifespan)
@@ -92,6 +138,68 @@ def _reset_fallback_session() -> None:
     global _fallback_session
     if _fallback_session is not None:
         _fallback_session.reset()
+
+
+# -----------------------------------------------------------------------------
+# Dispatcher access
+# -----------------------------------------------------------------------------
+
+_fallback_dispatcher: Dispatcher | None = None
+
+
+def _get_dispatcher(ctx: Context | None) -> Dispatcher:
+    """Extract the process-wide `Dispatcher` from request context.
+
+    Falls back to a lazily constructed dispatcher for direct function
+    calls (testing without an MCP context).
+    """
+    if ctx is not None and hasattr(ctx, "request_context"):
+        lifespan_ctx = ctx.request_context.lifespan_context
+        if lifespan_ctx and "dispatcher" in lifespan_ctx:
+            return lifespan_ctx["dispatcher"]
+    return _get_fallback_dispatcher()
+
+
+def _get_fallback_dispatcher() -> Dispatcher:
+    """Get or create the fallback dispatcher for direct function calls."""
+    global _fallback_dispatcher
+    if _fallback_dispatcher is None:
+        _fallback_dispatcher = _build_dispatcher()
+    return _fallback_dispatcher
+
+
+def _reset_fallback_dispatcher() -> None:
+    """Reset the fallback dispatcher (for testing)."""
+    global _fallback_dispatcher
+    _fallback_dispatcher = None
+
+
+@contextmanager
+def dispatched(
+    tool_name: str,
+    ctx: Context | None = None,
+) -> Generator[EffectiveCapabilities, None, None]:
+    """Resolve effective capabilities for one tool call and enter its graph context.
+
+    Pulls the per-request `Dispatcher` and `SessionState` from `ctx`,
+    wraps the session as a `SessionStateOverlay`, calls
+    `Dispatcher.prepare(tool_name, session_overlay=overlay)`, and enters
+    ``with using_conversion_graph(eff.unit_system):``. Yields the
+    `EffectiveCapabilities` so the tool body can read `eff.audit` if
+    needed.
+
+    Raises
+    ------
+    CapabilityNotAvailable
+        Raised by `Dispatcher.prepare` if `tool_name` is not in
+        ``eff.tools`` for the resolved tier.
+    """
+    dispatcher = _get_dispatcher(ctx)
+    session = _get_session(ctx)
+    overlay = SessionStateOverlay(session=session)
+    eff = dispatcher.prepare(tool_name, session_overlay=overlay)
+    with using_conversion_graph(eff.unit_system):
+        yield eff
 
 
 def _all_known_dimensions(session: SessionState | None = None) -> dict[str, "Dimension"]:
