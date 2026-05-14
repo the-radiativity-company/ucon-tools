@@ -49,11 +49,14 @@ from ucon.tools.mcp.system import (
     CapabilityNotAvailable,
     Dispatcher,
     EffectiveCapabilities,
+    ENV_PROFILE,
+    ENV_SYSTEM,
     OperatorOverlayPolicy,
     OperatorState,
     ProcessBase,
     SessionOverlayPolicy,
     SessionStateOverlay,
+    StartupConfig,
     StderrJsonSink,
     SystemClock,
     TIER_CONFIGS,
@@ -61,18 +64,32 @@ from ucon.tools.mcp.system import (
 from ucon.packages import EdgeDef, PackageLoadError, UnitDef
 
 
-def _build_dispatcher() -> Dispatcher:
+def _build_dispatcher(config: StartupConfig | None = None) -> Dispatcher:
     """Construct the process-wide `Dispatcher`.
 
     Snapshots the registered tool roster and formula registry at call
     time (via `ProcessBase.from_globals()`), uses ucon's default graph
     as the base unit system, and pairs both shipped overlay policies
-    with `TIER_CONFIGS`. The default identity is the standard tier,
-    principal `"local"`; transport-level identity extraction is
-    deliberately out of scope here.
+    with `TIER_CONFIGS`.
+
+    The optional ``config`` argument carries operator-supplied startup
+    knobs:
+
+    - ``config.profile`` becomes ``default_identity.tier`` (forward-
+      compat hook for transport-less callers; v0.5.0 still uses the
+      ``"local"`` principal).
+    - ``config.system`` is stamped onto ``ProcessBase.catalog`` for
+      future ``UnitSystem`` catalog resolution. v0.5.0 does not
+      consult the value at runtime.
+    - ``config.tier_header`` is currently unused at build time;
+      consumed by future transport-level identity extraction.
+
+    When ``config`` is omitted, defaults preserve v0.4.x behavior:
+    ``StartupConfig()`` → ``"standard"`` profile, ``catalog=None``.
     """
+    cfg = config if config is not None else StartupConfig()
     return Dispatcher(
-        process_base=ProcessBase.from_globals(),
+        process_base=ProcessBase.from_globals(catalog=cfg.system),
         operator_state=OperatorState(),
         policies={
             "session": SessionOverlayPolicy(),
@@ -81,7 +98,7 @@ def _build_dispatcher() -> Dispatcher:
         tier_configs=TIER_CONFIGS,
         clock=SystemClock(),
         sink=StderrJsonSink(),
-        default_identity=CallerIdentity(tier="standard", principal="local"),
+        default_identity=CallerIdentity(tier=cfg.profile, principal="local"),
     )
 
 
@@ -95,7 +112,7 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
     """
     yield {
         "session": DefaultSessionState(),
-        "dispatcher": _build_dispatcher(),
+        "dispatcher": _build_dispatcher(_get_startup_config()),
     }
 
 
@@ -147,6 +164,7 @@ def _reset_fallback_session() -> None:
 # -----------------------------------------------------------------------------
 
 _fallback_dispatcher: Dispatcher | None = None
+_startup_config: StartupConfig | None = None
 
 
 def _get_dispatcher(ctx: Context | None) -> Dispatcher:
@@ -163,10 +181,15 @@ def _get_dispatcher(ctx: Context | None) -> Dispatcher:
 
 
 def _get_fallback_dispatcher() -> Dispatcher:
-    """Get or create the fallback dispatcher for direct function calls."""
+    """Get or create the fallback dispatcher for direct function calls.
+
+    Honors the active `StartupConfig` (if any) so direct-call tests and
+    early lifecycle inspection see the same dispatcher the SSE/stdio
+    runtime would build.
+    """
     global _fallback_dispatcher
     if _fallback_dispatcher is None:
-        _fallback_dispatcher = _build_dispatcher()
+        _fallback_dispatcher = _build_dispatcher(_get_startup_config())
     return _fallback_dispatcher
 
 
@@ -174,6 +197,39 @@ def _reset_fallback_dispatcher() -> None:
     """Reset the fallback dispatcher (for testing)."""
     global _fallback_dispatcher
     _fallback_dispatcher = None
+
+
+# -----------------------------------------------------------------------------
+# Startup configuration singleton
+# -----------------------------------------------------------------------------
+
+def _get_startup_config() -> StartupConfig | None:
+    """Return the operator-supplied `StartupConfig`, if any.
+
+    `None` indicates no operator overrides have been applied; callers
+    should treat that as equivalent to ``StartupConfig()`` (the v0.4.x
+    defaults).
+    """
+    return _startup_config
+
+
+def _set_startup_config(config: StartupConfig | None) -> None:
+    """Install the process-wide `StartupConfig`.
+
+    Resets the fallback dispatcher so the next direct call rebuilds
+    with the new config. The lifespan-bound dispatcher constructed by
+    `lifespan` reads `_get_startup_config()` at server start, so this
+    setter must run before `mcp.run(...)` to take effect for the
+    transport-bound dispatcher.
+    """
+    global _startup_config
+    _startup_config = config
+    _reset_fallback_dispatcher()
+
+
+def _reset_startup_config() -> None:
+    """Clear the process-wide `StartupConfig` (testing helper)."""
+    _set_startup_config(None)
 
 
 @contextmanager
@@ -3809,9 +3865,17 @@ def main():
     """Run the ucon MCP server.
 
     Usage:
-        ucon-mcp              # stdio mode (default)
-        ucon-mcp --sse        # SSE mode on port 8000
-        ucon-mcp --sse --port 3000  # SSE mode on custom port
+        ucon-mcp                          # stdio mode (default)
+        ucon-mcp --sse                    # SSE mode on port 8000
+        ucon-mcp --sse --port 3000        # SSE mode on custom port
+        ucon-mcp --profile preview        # opt the default identity into the preview tier
+        ucon-mcp --system NAME            # stamp a forward-compat catalog name on ProcessBase
+        UCON_PROFILE=preview ucon-mcp     # same via environment
+
+    Resolution layering for the startup knobs (highest precedence first):
+    CLI flags > environment variables > field defaults. Absent both,
+    behavior matches v0.4.x: standard profile, no catalog, no tier
+    header.
     """
     import argparse
 
@@ -3835,7 +3899,47 @@ def main():
         default="127.0.0.1",
         help="Host for SSE mode (default: 127.0.0.1)",
     )
+    parser.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        choices=sorted(TIER_CONFIGS),
+        help=(
+            "Default identity tier for the dispatcher "
+            f"(env: {ENV_PROFILE}). Defaults to 'standard'."
+        ),
+    )
+    parser.add_argument(
+        "--system",
+        type=str,
+        default=None,
+        help=(
+            "Forward-compat UnitSystem catalog name stamped on "
+            f"ProcessBase.catalog (env: {ENV_SYSTEM}). Not resolved at "
+            "runtime in v0.5.0."
+        ),
+    )
+    parser.add_argument(
+        "--tier-header",
+        type=str,
+        default=None,
+        dest="tier_header",
+        help=(
+            "Forward-compat transport header name to extract caller "
+            "tier from. Parsed and stored on StartupConfig; not "
+            "consumed at runtime in v0.5.0."
+        ),
+    )
     args = parser.parse_args()
+
+    # Resolve startup config: CLI flags override env-derived values.
+    env_config = StartupConfig.from_env()
+    startup = env_config.with_overrides(
+        profile=args.profile if args.profile is not None else env_config.profile,
+        system=args.system if args.system is not None else env_config.system,
+        tier_header=args.tier_header,
+    )
+    _set_startup_config(startup)
 
     if args.sse:
         # Configure SSE settings

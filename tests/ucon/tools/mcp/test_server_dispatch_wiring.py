@@ -31,6 +31,8 @@ from ucon.tools.mcp.server import (
     _get_dispatcher,
     _get_fallback_dispatcher,
     _reset_fallback_dispatcher,
+    _reset_startup_config,
+    _set_startup_config,
     convert,
     dispatched,
     lifespan,
@@ -40,12 +42,14 @@ from ucon.tools.mcp.suggestions import ConversionError
 from ucon.tools.mcp.system import (
     CallerIdentity,
     CapabilityNotAvailable,
+    DEFAULT_CATALOG,
     Dispatcher,
     EffectiveCapabilities,
     OperatorOverlayPolicy,
     OperatorState,
     ProcessBase,
     SessionOverlayPolicy,
+    StartupConfig,
     StderrJsonSink,
     SystemClock,
     TIER_CONFIGS,
@@ -55,8 +59,10 @@ from ucon.tools.mcp.system import (
 @pytest.fixture(autouse=True)
 def _reset_fallback():
     _reset_fallback_dispatcher()
+    _reset_startup_config()
     yield
     _reset_fallback_dispatcher()
+    _reset_startup_config()
 
 
 # -----------------------------------------------------------------------------
@@ -312,3 +318,66 @@ def test_convert_default_dispatcher_path_succeeds():
     result = convert(value=1000.0, from_unit="m", to_unit="km")
     assert not isinstance(result, ConversionError)
     assert result.quantity == pytest.approx(1.0)
+
+
+# -----------------------------------------------------------------------------
+# StartupConfig integration
+# -----------------------------------------------------------------------------
+
+def test_build_dispatcher_without_config_matches_defaults():
+    """Calling `_build_dispatcher()` with no config must preserve v0.4.x
+    behavior: standard tier and `DEFAULT_CATALOG` on the process base.
+
+    `ProcessBase.from_globals(catalog=None)` substitutes
+    `DEFAULT_CATALOG`; the v0.4.x path always built a process base with
+    that default, so omitting `--system` must reproduce it exactly.
+    """
+    d = _build_dispatcher()
+    assert d.default_identity.tier == "standard"
+    assert d.process_base.catalog is DEFAULT_CATALOG
+
+
+def test_build_dispatcher_consumes_profile_from_config():
+    cfg = StartupConfig(profile="preview")
+    d = _build_dispatcher(cfg)
+    assert d.default_identity == CallerIdentity(
+        tier="preview", principal="local"
+    )
+
+
+def test_build_dispatcher_stamps_system_onto_process_base_catalog():
+    cfg = StartupConfig(system="scientific")
+    d = _build_dispatcher(cfg)
+    assert d.process_base.catalog == "scientific"
+
+
+def test_set_startup_config_resets_fallback_dispatcher():
+    """Installing a new `StartupConfig` must invalidate the memoized
+    fallback so the next direct call rebuilds with the new knobs.
+    """
+    d1 = _get_fallback_dispatcher()
+    assert d1.default_identity.tier == "standard"
+    _set_startup_config(StartupConfig(profile="preview"))
+    d2 = _get_fallback_dispatcher()
+    assert d2 is not d1
+    assert d2.default_identity.tier == "preview"
+
+
+def test_lifespan_dispatcher_honors_active_startup_config():
+    """`lifespan` must consult `_get_startup_config()` at server start.
+    """
+    _set_startup_config(StartupConfig(profile="preview", system="med"))
+    ctx_dict = _enter_lifespan()
+    d = ctx_dict["dispatcher"]
+    assert d.default_identity.tier == "preview"
+    assert d.process_base.catalog == "med"
+
+
+def test_lifespan_dispatcher_falls_back_to_defaults_when_no_config():
+    """When no operator override is installed, `lifespan` must yield a
+    dispatcher with the v0.4.x defaults.
+    """
+    ctx_dict = _enter_lifespan()
+    d = ctx_dict["dispatcher"]
+    assert d.default_identity.tier == "standard"
+    assert d.process_base.catalog is DEFAULT_CATALOG

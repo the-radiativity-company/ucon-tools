@@ -48,6 +48,11 @@ from ucon.tools.mcp.system.overlay import (
     SessionStateOverlay,
 )
 from ucon.tools.mcp.system.process_base import ProcessBase
+from ucon.tools.mcp.system.startup import (
+    ENV_PROFILE,
+    ENV_SYSTEM,
+    StartupConfig,
+)
 from ucon.tools.mcp.system.value_types import (
     ActiveBundle,
     CallerIdentity,
@@ -76,6 +81,8 @@ __all__ = [
     "CollectingSink",
     "DEFAULT_CATALOG",
     "Dispatcher",
+    "ENV_PROFILE",
+    "ENV_SYSTEM",
     "EffectiveCapabilities",
     "FixedClock",
     "OperatorOverlayPolicy",
@@ -88,6 +95,7 @@ __all__ = [
     "SessionOverlay",
     "SessionOverlayPolicy",
     "SessionStateOverlay",
+    "StartupConfig",
     "StaticCatalog",
     "StderrJsonSink",
     "SystemClock",
