@@ -44,7 +44,7 @@ from ucon.tools.mcp.system.value_types import (
 )
 
 if TYPE_CHECKING:
-    from ucon.graph import ConversionGraph
+    from ucon.system import UnitSystem
     from ucon.tools.mcp.session import SessionState
 
 
@@ -59,15 +59,15 @@ class SessionOverlay(Protocol):
     """Per-session mutable overlay consumed by `SessionOverlayPolicy`.
 
     `is_empty()` lets `OperatorOverlayPolicy` defensively reject any
-    overlay that actually carries content. Today the overlay's
-    `get_unit_system()` returns the session's mutable conversion graph
-    directly; an `as_system_delta()` materialization is anticipated
-    but not yet implemented.
+    overlay that actually carries content. The overlay's
+    `get_unit_system()` returns the session's :class:`~ucon.system.UnitSystem`
+    directly; an `as_system_delta()` materialization is anticipated but
+    not yet implemented.
     """
 
     def is_empty(self) -> bool: ...
 
-    def get_unit_system(self) -> "ConversionGraph": ...
+    def get_unit_system(self) -> "UnitSystem": ...
 
 
 @runtime_checkable
@@ -77,7 +77,7 @@ class OverlayPolicy(Protocol):
     def resolve(
         self,
         *,
-        base: "ConversionGraph",
+        base: "UnitSystem",
         base_tools: frozenset[str],
         base_formulas: frozenset[str],
         active_bundles: Sequence[CapabilityBundle],
@@ -135,7 +135,7 @@ class SessionOverlayPolicy:
     def resolve(
         self,
         *,
-        base: "ConversionGraph",
+        base: "UnitSystem",
         base_tools: frozenset[str],
         base_formulas: frozenset[str],
         active_bundles: Sequence[CapabilityBundle],
@@ -168,7 +168,7 @@ class OperatorOverlayPolicy:
     def resolve(
         self,
         *,
-        base: "ConversionGraph",
+        base: "UnitSystem",
         base_tools: frozenset[str],
         base_formulas: frozenset[str],
         active_bundles: Sequence[CapabilityBundle],
@@ -200,8 +200,8 @@ class SessionStateOverlay:
     session that has only called `get_graph()` without mutation is
     reported as empty.
 
-    `get_unit_system()` returns the session's mutable graph
-    (`session.get_graph()`).
+    `get_unit_system()` returns the session's mutable
+    :class:`~ucon.system.UnitSystem` (`session.get_unit_system()`).
     """
 
     session: "SessionState"
@@ -214,5 +214,5 @@ class SessionStateOverlay:
             and self.session.get_active_computation() is None
         )
 
-    def get_unit_system(self) -> "ConversionGraph":
-        return self.session.get_graph()
+    def get_unit_system(self) -> "UnitSystem":
+        return self.session.get_unit_system()

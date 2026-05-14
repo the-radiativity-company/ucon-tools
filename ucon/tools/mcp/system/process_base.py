@@ -13,14 +13,11 @@ referenced by `OverlayPolicy.resolve(...)` on every request.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from ucon.graph import get_default_graph
+from ucon.system import UnitSystem
 from ucon.tools.mcp.formulas import list_formulas
 from ucon.tools.mcp.system.catalog import DEFAULT_CATALOG
-
-if TYPE_CHECKING:
-    from ucon.graph import ConversionGraph
 
 
 @dataclass(frozen=True)
@@ -32,9 +29,13 @@ class ProcessBase:
 
     Attributes
     ----------
-    unit_system : ConversionGraph
-        The base conversion graph for the process. The substrate is
-        ucon's `ConversionGraph` (the "active unit system" mechanism).
+    unit_system : UnitSystem
+        The base unit system for the process. Owns the v1.8
+        :class:`~ucon.system.UnitSystem` (basis, registries,
+        conversion graph, basis graph, constants). Dispatch activates
+        this system with ``with use(eff.unit_system):`` and reaches
+        through to the underlying graph via
+        ``eff.unit_system.conversions`` where needed.
     tools : frozenset[str]
         Names of MCP tools advertised by this process. Dispatch gates each
         request by `request.tool in effective.tools`.
@@ -47,7 +48,7 @@ class ProcessBase:
         conforming object is accepted; `DEFAULT_CATALOG` is the default.
     """
 
-    unit_system: "ConversionGraph"
+    unit_system: "UnitSystem"
     tools: frozenset[str] = field(default_factory=frozenset)
     formulas: frozenset[str] = field(default_factory=frozenset)
     catalog: Any = None
@@ -56,7 +57,7 @@ class ProcessBase:
     def from_globals(
         cls,
         *,
-        unit_system: "ConversionGraph | None" = None,
+        unit_system: "UnitSystem | None" = None,
         tools: frozenset[str] | None = None,
         formulas: frozenset[str] | None = None,
         catalog: Any = None,
@@ -65,7 +66,9 @@ class ProcessBase:
 
         Defaults each field by introspecting the running process:
 
-        - `unit_system`: `ucon.graph.get_default_graph()`.
+        - `unit_system`: ``UnitSystem.from_globals()`` (snapshots the
+          live registries from ``ucon._loader``, ``ucon.dimension``,
+          ``ucon.basis.graph``, and ``ucon.graph`` by reference).
         - `tools`: names of every `@mcp.tool()` registered on the
           module-level `FastMCP` instance in `ucon.tools.mcp.server`.
         - `formulas`: names returned by the formula registry's
@@ -76,7 +79,7 @@ class ProcessBase:
         method has no side effects; it produces a fresh frozen value.
         """
         if unit_system is None:
-            unit_system = get_default_graph()
+            unit_system = UnitSystem.from_globals()
         if tools is None:
             tools = _discover_registered_tools()
         if formulas is None:

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from ucon.graph import ConversionGraph
+from ucon.system import UnitSystem
 from ucon.tools.mcp.session import DefaultSessionState
 from ucon.tools.mcp.system import (
     CapabilityBundle,
@@ -38,21 +38,31 @@ from ucon.tools.mcp.system import (
 # Test doubles
 # -----------------------------------------------------------------------------
 
+def _system() -> UnitSystem:
+    """Build a fresh ``UnitSystem`` for use as a `base` sentinel.
+
+    Identity matters in these tests (we assert ``eff.unit_system is X``);
+    snapshotting globals each call gives a distinct ``UnitSystem`` value
+    on every invocation.
+    """
+    return UnitSystem.from_globals()
+
+
 class _StubOverlay:
     """Minimal `SessionOverlay` test double."""
 
     def __init__(
         self,
-        unit_system: ConversionGraph | None = None,
+        unit_system: UnitSystem | None = None,
         empty: bool = True,
     ) -> None:
-        self._unit_system = unit_system if unit_system is not None else ConversionGraph()
+        self._unit_system = unit_system if unit_system is not None else _system()
         self._empty = empty
 
     def is_empty(self) -> bool:
         return self._empty
 
-    def get_unit_system(self) -> ConversionGraph:
+    def get_unit_system(self) -> UnitSystem:
         return self._unit_system
 
 
@@ -97,7 +107,7 @@ def test_session_state_overlay_satisfies_session_overlay_protocol():
 # -----------------------------------------------------------------------------
 
 def test_session_policy_uses_base_when_no_overlay():
-    base = ConversionGraph()
+    base = _system()
     policy = SessionOverlayPolicy()
     eff = policy.resolve(
         base=base,
@@ -113,9 +123,9 @@ def test_session_policy_uses_base_when_no_overlay():
 
 
 def test_session_policy_uses_overlay_unit_system_when_provided():
-    base = ConversionGraph()
-    overlay_graph = ConversionGraph()
-    overlay = _StubOverlay(unit_system=overlay_graph, empty=False)
+    base = _system()
+    overlay_system = _system()
+    overlay = _StubOverlay(unit_system=overlay_system, empty=False)
     policy = SessionOverlayPolicy()
     eff = policy.resolve(
         base=base,
@@ -124,7 +134,7 @@ def test_session_policy_uses_overlay_unit_system_when_provided():
         active_bundles=(),
         session_overlay=overlay,
     )
-    assert eff.unit_system is overlay_graph
+    assert eff.unit_system is overlay_system
 
 
 def test_session_policy_unions_tools_and_formulas_across_bundles():
@@ -140,7 +150,7 @@ def test_session_policy_unions_tools_and_formulas_across_bundles():
         formulas=frozenset({"f2"}),
     )
     eff = policy.resolve(
-        base=ConversionGraph(),
+        base=_system(),
         base_tools=frozenset({"convert"}),
         base_formulas=frozenset({"bmi"}),
         active_bundles=(b1, b2),
@@ -155,7 +165,7 @@ def test_session_policy_audit_preserves_bundle_order():
     b1 = _bundle(name="b1", version="1.0")
     b2 = _bundle(name="b2", version="2.0")
     eff = policy.resolve(
-        base=ConversionGraph(),
+        base=_system(),
         base_tools=frozenset(),
         base_formulas=frozenset(),
         active_bundles=(b1, b2),
@@ -165,7 +175,7 @@ def test_session_policy_audit_preserves_bundle_order():
 
 
 def test_session_policy_does_not_leak_across_independent_overlays():
-    base = ConversionGraph()
+    base = _system()
     policy = SessionOverlayPolicy()
     a = _StubOverlay(empty=False)
     b = _StubOverlay(empty=False)
@@ -185,7 +195,7 @@ def test_session_policy_does_not_leak_across_independent_overlays():
 # -----------------------------------------------------------------------------
 
 def test_operator_policy_accepts_none_session_overlay():
-    base = ConversionGraph()
+    base = _system()
     policy = OperatorOverlayPolicy()
     eff = policy.resolve(
         base=base,
@@ -199,7 +209,7 @@ def test_operator_policy_accepts_none_session_overlay():
 
 
 def test_operator_policy_accepts_empty_session_overlay():
-    base = ConversionGraph()
+    base = _system()
     policy = OperatorOverlayPolicy()
     eff = policy.resolve(
         base=base,
@@ -216,7 +226,7 @@ def test_operator_policy_rejects_non_empty_session_overlay():
     policy = OperatorOverlayPolicy()
     with pytest.raises(SessionMutationRejected):
         policy.resolve(
-            base=ConversionGraph(),
+            base=_system(),
             base_tools=frozenset(),
             base_formulas=frozenset(),
             active_bundles=(),
@@ -228,7 +238,7 @@ def test_operator_policy_unions_tools_and_formulas_across_bundles():
     policy = OperatorOverlayPolicy()
     b1 = _bundle(tools=frozenset({"t1"}), formulas=frozenset({"f1"}))
     eff = policy.resolve(
-        base=ConversionGraph(),
+        base=_system(),
         base_tools=frozenset({"convert"}),
         base_formulas=frozenset({"bmi"}),
         active_bundles=(b1,),
@@ -243,7 +253,7 @@ def test_operator_policy_audit_includes_each_active_bundle():
     b1 = _bundle(name="b1", version="1.0")
     b2 = _bundle(name="b2", version="2.0")
     eff = policy.resolve(
-        base=ConversionGraph(),
+        base=_system(),
         base_tools=frozenset(),
         base_formulas=frozenset(),
         active_bundles=(b1, b2),
@@ -265,7 +275,7 @@ def test_bundle_with_unit_packages_rejected_by_session_policy():
     policy = SessionOverlayPolicy()
     with pytest.raises(NotImplementedError):
         policy.resolve(
-            base=ConversionGraph(),
+            base=_system(),
             base_tools=frozenset(),
             base_formulas=frozenset(),
             active_bundles=(bundle,),
@@ -284,7 +294,7 @@ def test_bundle_with_constants_rejected_by_operator_policy():
     policy = OperatorOverlayPolicy()
     with pytest.raises(NotImplementedError):
         policy.resolve(
-            base=ConversionGraph(),
+            base=_system(),
             base_tools=frozenset(),
             base_formulas=frozenset(),
             active_bundles=(bundle,),
@@ -324,13 +334,15 @@ def test_session_state_overlay_non_empty_when_quantity_kind_registered():
 def test_session_state_overlay_get_unit_system_returns_session_graph():
     state = DefaultSessionState()
     overlay = SessionStateOverlay(session=state)
-    assert overlay.get_unit_system() is state.get_graph()
+    # The overlay now returns a UnitSystem; its `conversions` field
+    # is the session's mutable graph by reference.
+    assert overlay.get_unit_system().conversions is state.get_graph()
 
 
 def test_session_state_overlay_wired_through_session_policy():
     state = DefaultSessionState()
     overlay = SessionStateOverlay(session=state)
-    base = ConversionGraph()
+    base = _system()
     policy = SessionOverlayPolicy()
     eff = policy.resolve(
         base=base,
@@ -339,7 +351,7 @@ def test_session_state_overlay_wired_through_session_policy():
         active_bundles=(),
         session_overlay=overlay,
     )
-    # Effective unit_system is the session's mutable graph, not the
-    # process base.
-    assert eff.unit_system is state.get_graph()
+    # Effective unit_system carries the session's mutable graph, not
+    # the process base.
+    assert eff.unit_system.conversions is state.get_graph()
     assert isinstance(eff, EffectiveCapabilities)

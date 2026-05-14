@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from ucon.graph import get_default_graph
+from ucon.system import UnitSystem
 from ucon.tools.mcp.system import (
     ActiveBundle,
     CallerIdentity,
@@ -128,29 +128,29 @@ def test_active_bundle_records_lease_clamping():
 # -----------------------------------------------------------------------------
 
 def test_effective_capabilities_construction():
-    g = get_default_graph()
+    sys = UnitSystem.from_globals()
     eff = EffectiveCapabilities(
-        unit_system=g,
+        unit_system=sys,
         tools=frozenset({"convert"}),
         formulas=frozenset({"bmi"}),
         audit=(("core", "1.0"),),
     )
-    assert eff.unit_system is g
+    assert eff.unit_system is sys
     assert eff.tools == frozenset({"convert"})
     assert eff.formulas == frozenset({"bmi"})
     assert eff.audit == (("core", "1.0"),)
 
 
 def test_effective_capabilities_is_frozen():
-    g = get_default_graph()
-    eff = EffectiveCapabilities(unit_system=g)
+    sys = UnitSystem.from_globals()
+    eff = EffectiveCapabilities(unit_system=sys)
     with pytest.raises(FrozenInstanceError):
         eff.tools = frozenset()  # type: ignore[misc]
 
 
 def test_effective_capabilities_defaults():
-    g = get_default_graph()
-    eff = EffectiveCapabilities(unit_system=g)
+    sys = UnitSystem.from_globals()
+    eff = EffectiveCapabilities(unit_system=sys)
     assert eff.tools == frozenset()
     assert eff.formulas == frozenset()
     assert eff.audit == ()

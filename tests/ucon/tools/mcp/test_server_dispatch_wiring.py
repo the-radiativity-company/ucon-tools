@@ -24,6 +24,7 @@ import asyncio
 import pytest
 
 from ucon.graph import get_default_graph, using_conversion_graph
+from ucon.system import UnitSystem
 from ucon.tools.mcp.server import (
     _build_dispatcher,
     _build_inline_graph,
@@ -86,7 +87,10 @@ def test_build_dispatcher_wires_both_overlay_policies():
 
 def test_build_dispatcher_process_base_uses_default_graph():
     d = _build_dispatcher()
-    assert d.process_base.unit_system is get_default_graph()
+    # ProcessBase.unit_system is a UnitSystem (v1.8 lift); its
+    # `conversions` field references ucon's default graph by snapshot.
+    assert isinstance(d.process_base.unit_system, UnitSystem)
+    assert d.process_base.unit_system.conversions is get_default_graph()
 
 
 def test_build_dispatcher_process_base_tools_include_registered_tools():
@@ -225,7 +229,7 @@ def test_convert_raises_capability_not_available_when_tool_gated_off():
     """
     locked_down = Dispatcher(
         process_base=ProcessBase(
-            unit_system=get_default_graph(),
+            unit_system=UnitSystem.from_globals(),
             tools=frozenset(),  # convert is NOT advertised
             formulas=frozenset(),
             catalog=None,
@@ -262,9 +266,24 @@ def test_convert_uses_dispatcher_resolved_unit_system_under_preview_tier():
     assert err is None
     assert custom_graph is not None
 
+    # Wrap the custom graph in a UnitSystem: ProcessBase.unit_system is
+    # now a UnitSystem (v1.8 lift), so we override the `conversions`
+    # field of a globals-snapshot to point at our custom graph.
+    base_system = UnitSystem.from_globals()
+    custom_system = UnitSystem(
+        basis=base_system.basis,
+        units=base_system.units,
+        dimensions=base_system.dimensions,
+        base_units=base_system.base_units,
+        conversions=custom_graph,
+        basis_graph=base_system.basis_graph,
+        contexts=base_system.contexts,
+        constants=base_system.constants,
+    )
+
     preview_dispatcher = Dispatcher(
         process_base=ProcessBase(
-            unit_system=custom_graph,
+            unit_system=custom_system,
             tools=frozenset({"convert"}),
             formulas=frozenset(),
             catalog=None,

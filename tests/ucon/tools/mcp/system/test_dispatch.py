@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from ucon.graph import ConversionGraph
+from ucon.system import UnitSystem
 from ucon.tools.mcp.system import (
     ActiveBundle,
     CapabilityBundle,
@@ -63,7 +63,7 @@ def _make_dispatcher(
 ) -> Dispatcher:
     return Dispatcher(
         process_base=process_base or ProcessBase(
-            unit_system=ConversionGraph(),
+            unit_system=UnitSystem.from_globals(),
             tools=frozenset({"convert"}),
             formulas=frozenset({"bmi"}),
             catalog=None,
@@ -124,9 +124,9 @@ def _active(
 # -----------------------------------------------------------------------------
 
 def test_prepare_returns_effective_capabilities_for_base_tool():
-    base_graph = ConversionGraph()
+    base_system = UnitSystem.from_globals()
     base = ProcessBase(
-        unit_system=base_graph,
+        unit_system=base_system,
         tools=frozenset({"convert"}),
         formulas=frozenset({"bmi"}),
         catalog=None,
@@ -135,7 +135,7 @@ def test_prepare_returns_effective_capabilities_for_base_tool():
 
     eff = dispatcher.prepare("convert")
 
-    assert eff.unit_system is base_graph
+    assert eff.unit_system is base_system
     assert eff.tools == frozenset({"convert"})
     assert eff.formulas == frozenset({"bmi"})
     assert eff.audit == ()
@@ -309,32 +309,32 @@ def test_active_for_filters_by_tier():
 # -----------------------------------------------------------------------------
 
 class _StubOverlay:
-    def __init__(self, graph, empty=False):
-        self._graph = graph
+    def __init__(self, unit_system, empty=False):
+        self._unit_system = unit_system
         self._empty = empty
 
     def is_empty(self):
         return self._empty
 
     def get_unit_system(self):
-        return self._graph
+        return self._unit_system
 
 
 def test_standard_tier_consults_session_overlay():
-    overlay_graph = ConversionGraph()
-    overlay = _StubOverlay(overlay_graph, empty=False)
+    overlay_system = UnitSystem.from_globals()
+    overlay = _StubOverlay(overlay_system, empty=False)
     dispatcher = _make_dispatcher(default_tier="standard")
     eff = dispatcher.prepare("convert", session_overlay=overlay)
-    assert eff.unit_system is overlay_graph
+    assert eff.unit_system is overlay_system
 
 
 def test_preview_tier_drops_caller_session_overlay():
     # PREVIEW.mutation_allowed is False, so any caller-supplied overlay
     # must be ignored (rather than reach OperatorOverlayPolicy and raise
     # SessionMutationRejected).
-    process_graph = ConversionGraph()
+    process_system = UnitSystem.from_globals()
     base = ProcessBase(
-        unit_system=process_graph,
+        unit_system=process_system,
         tools=frozenset({"convert"}),
         formulas=frozenset(),
         catalog=None,
@@ -343,10 +343,10 @@ def test_preview_tier_drops_caller_session_overlay():
         process_base=base,
         default_tier="preview",
     )
-    overlay = _StubOverlay(ConversionGraph(), empty=False)
+    overlay = _StubOverlay(UnitSystem.from_globals(), empty=False)
     eff = dispatcher.prepare("convert", session_overlay=overlay)
-    # Effective graph is the process base, not the overlay.
-    assert eff.unit_system is process_graph
+    # Effective unit_system is the process base, not the overlay.
+    assert eff.unit_system is process_system
 
 
 # -----------------------------------------------------------------------------
@@ -386,7 +386,7 @@ def test_unknown_overlay_policy_raises_key_error():
     # Construct a dispatcher whose tier names a missing policy.
     dispatcher = Dispatcher(
         process_base=ProcessBase(
-            unit_system=ConversionGraph(),
+            unit_system=UnitSystem.from_globals(),
             tools=frozenset({"convert"}),
             formulas=frozenset(),
             catalog=None,

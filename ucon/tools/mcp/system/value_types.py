@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 
 if TYPE_CHECKING:
     from ucon.constants import Constant
-    from ucon.graph import ConversionGraph
+    from ucon.system import UnitSystem
 
 
 @dataclass(frozen=True)
@@ -91,9 +91,16 @@ class EffectiveCapabilities:
     """The composed result of process base + operator overlays + session.
 
     Produced by `OverlayPolicy.resolve(...)` per request. Pure value.
+
+    ``unit_system`` is the v1.8 :class:`~ucon.system.UnitSystem` value;
+    callers route through ``with use(eff.unit_system):`` to make the
+    dispatcher-resolved system the active one. The underlying
+    :class:`~ucon.graph.ConversionGraph` is reachable via
+    ``eff.unit_system.conversions`` for code paths that still
+    operate at graph granularity (e.g., inline-graph composition).
     """
 
-    unit_system: "ConversionGraph"
+    unit_system: "UnitSystem"
     tools: frozenset[str] = field(default_factory=frozenset)
     formulas: frozenset[str] = field(default_factory=frozenset)
     audit: tuple[Any, ...] = ()

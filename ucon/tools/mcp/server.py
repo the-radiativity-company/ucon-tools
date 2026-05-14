@@ -21,6 +21,7 @@ from ucon.dimension import all_dimensions
 from ucon.core import Number, Scale, Unit, UnitProduct
 from ucon import parse_unit
 from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_conversion_graph
+from ucon.system import UnitSystem, use as use_system
 from ucon.maps import LinearMap
 from ucon.tools.mcp.formulas import list_formulas as _list_formulas, get_formula
 from ucon.tools.mcp.koq import (
@@ -180,14 +181,29 @@ def dispatched(
     tool_name: str,
     ctx: Context | None = None,
 ) -> Generator[EffectiveCapabilities, None, None]:
-    """Resolve effective capabilities for one tool call and enter its graph context.
+    """Resolve effective capabilities for one tool call and enter its system context.
 
     Pulls the per-request `Dispatcher` and `SessionState` from `ctx`,
     wraps the session as a `SessionStateOverlay`, calls
     `Dispatcher.prepare(tool_name, session_overlay=overlay)`, and enters
-    ``with using_conversion_graph(eff.unit_system):``. Yields the
-    `EffectiveCapabilities` so the tool body can read `eff.audit` if
-    needed.
+    two nested ucon contexts:
+
+    1. ``with use(eff.unit_system):`` — activates the v1.8
+       :class:`~ucon.system.UnitSystem` so reach-through paths
+       (basis graph, constants, ``active()`` consumers, the algebra
+       cache) see the resolved system.
+    2. ``with using_conversion_graph(eff.unit_system.conversions):``
+       — pins the conversion-graph ContextVar so ``get_default_graph``
+       and parsing-graph callers see the dispatcher-resolved graph.
+
+    Both windows are needed: ``use(...)`` alone is not consulted by
+    ``ucon.graph.get_default_graph`` (which checks only the
+    conversion-graph ContextVar / module default), and
+    ``using_conversion_graph(...)`` alone bypasses the v1.8
+    ``UnitSystem`` activation.
+
+    Yields the `EffectiveCapabilities` so the tool body can read
+    ``eff.audit`` (and ``eff.unit_system`` / ``eff.unit_system.conversions``).
 
     Raises
     ------
@@ -199,7 +215,9 @@ def dispatched(
     session = _get_session(ctx)
     overlay = SessionStateOverlay(session=session)
     eff = dispatcher.prepare(tool_name, session_overlay=overlay)
-    with using_conversion_graph(eff.unit_system):
+    with use_system(eff.unit_system), using_conversion_graph(
+        eff.unit_system.conversions
+    ):
         yield eff
 
 
@@ -575,10 +593,10 @@ def convert(
             custom_edges=[{"src": "slug", "dst": "kg", "factor": 14.5939}])
     """
     # Dispatcher resolves the effective unit_system (base + active bundles +
-    # session overlay) and enters it as the ambient graph. Inline definitions
+    # session overlay) and enters it as the ambient system. Inline definitions
     # layer on top of that resolved graph for this call only.
     with dispatched("convert", ctx) as eff:
-        base_graph = eff.unit_system
+        base_graph = eff.unit_system.conversions
 
         # Build inline graph if custom definitions provided
         inline_graph, err = _build_inline_graph(custom_units, custom_edges, base_graph)
