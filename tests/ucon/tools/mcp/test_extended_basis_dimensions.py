@@ -344,5 +344,88 @@ class TestErrorSuggestionsIncludeExtended(_ExtBasisTestBase):
         self.assertNotIn("currency", suggestion_text)
 
 
+class TestCrossBasisArithmeticAfterExtend(_ExtBasisTestBase):
+    """``extend_basis`` must register a zero-pad embedding so subsequent
+    arithmetic between parent-basis units (e.g. SI ``s``) and extended-basis
+    units (e.g. ``USD`` on a financial basis) succeeds. Without the
+    embedding registered in the active ``BasisGraph``, ``unify`` raises
+    ``BasisMismatch`` and ``compute`` cannot construct the composed result.
+
+    Regression for ucon#247 / v0.5.0 §8.1 Phase 2.1 + Phase 2.5.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if cls.skip_tests:
+            return
+        from ucon.tools.mcp.server import compute, declare_computation
+        cls.compute = staticmethod(compute)
+        cls.declare_computation = staticmethod(declare_computation)
+
+    def _setup_fin_basis(self):
+        """Create a 'fin' basis with currency and register USD and year."""
+        self.extend_basis(
+            name="fin",
+            base="SI",
+            additional_components=[
+                {"name": "currency", "symbol": "C", "description": "monetary"},
+            ],
+        )
+        self.define_unit(name="USD", dimension="currency", aliases=["USD"])
+        self.define_unit(name="year", dimension="time", aliases=["year", "yr"])
+        self.define_conversion(src="year", dst="s", factor=31_557_600)
+
+    def test_compute_composes_extended_unit_with_si_time(self):
+        """``compute(USD, factors=[s/ea])`` produces ``USD·s`` after
+        ``extend_basis`` (Phase 2.5 regression)."""
+        self._setup_fin_basis()
+
+        result = self.compute(
+            initial_value=100,
+            initial_unit="USD",
+            factors=[{"numerator": "s", "denominator": "ea", "value": 1}],
+            expected_unit="USD*s",
+        )
+
+        # Successful compute returns a ComputeResult, not an error.
+        from ucon.tools.mcp.server import ComputeResult
+        self.assertIsInstance(result, ComputeResult)
+        self.assertAlmostEqual(result.quantity, 100.0)
+        # Dimension carries both time (SI) and currency (extended)
+        self.assertIn("time", result.dimension)
+        self.assertIn("currency", result.dimension)
+
+    def test_declare_computation_compound_extended_dim(self):
+        """``declare_computation(quantity_kind='capital_flow',
+        expected_unit='USD/year')`` succeeds — the unit string composes
+        ``USD`` (extended) and ``year`` (SI) into ``currency/time``
+        (Phase 2.1 regression)."""
+        self._setup_fin_basis()
+        self.define_quantity_kind(
+            name="capital_flow",
+            dimension="currency/time",
+            description="money per time",
+        )
+
+        from ucon.tools.mcp.server import ComputationDeclaration
+        decl = self.declare_computation(
+            quantity_kind="capital_flow",
+            expected_unit="USD/year",
+        )
+
+        self.assertIsInstance(decl, ComputationDeclaration)
+        self.assertEqual(decl.status, "valid")
+        self.assertEqual(decl.expected_dimension, "currency/time")
+
+    def test_convert_within_si_still_works_after_extend(self):
+        """``extend_basis`` must not break conversions that live entirely
+        on the parent basis (no regression on the standard graph)."""
+        self._setup_fin_basis()
+
+        result = self.convert(value=1, from_unit="year", to_unit="s")
+        self.assertAlmostEqual(result.quantity, 31_557_600.0)
+
+
 if __name__ == "__main__":
     unittest.main()

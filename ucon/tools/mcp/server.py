@@ -20,6 +20,8 @@ from ucon import Dimension, get_default_graph
 from ucon.dimension import all_dimensions
 from ucon.core import Number, Scale, Unit, UnitProduct
 from ucon import parse_unit
+from ucon.basis.graph import get_basis_graph
+from ucon.basis.transforms import BasisTransform
 from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_conversion_graph
 from ucon.system import UnitSystem, use as use_system
 from ucon.maps import LinearMap
@@ -3801,6 +3803,24 @@ def extend_basis(
         runtime_dimensions=tuple(runtime_dims),
     )
     session.register_extended_basis(basis_info)
+
+    # Register a ``parent -> runtime_basis`` zero-pad embedding in the
+    # active basis graph so that ``unify`` (and therefore the algebraic
+    # path through ``multiply_via`` / ``divide_via``) can lift parent
+    # vectors into the extended basis when composing with extended units.
+    # See ucon#247 — without these edges, arithmetic between a unit on
+    # ``runtime_basis`` and a unit on the parent raises ``BasisMismatch``.
+    # The reverse projection (extended -> parent) is registered too so
+    # that ``unify`` also accepts the symmetric direction; the projection
+    # will raise ``LossyProjection`` if a non-zero added component is
+    # asked to drop, which is the correct unification behavior.
+    if new_components:
+        graph = get_basis_graph()
+        forward = BasisTransform.append_components_embedding(
+            parent_basis, runtime_basis,
+        )
+        graph.add_transform(forward)
+        graph.add_transform(forward.embedding())
 
     new_dim_names = [d.name for d in runtime_dims if d.name is not None]
     if new_dim_names:
