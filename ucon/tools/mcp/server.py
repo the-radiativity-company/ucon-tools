@@ -6,11 +6,12 @@
 #   ucon-mcp              # Run via entry point
 #   python -m ucon.mcp    # Run as module
 
+import functools
 import hashlib
 import json
 import re
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, AsyncIterator, Generator
+from typing import TYPE_CHECKING, AsyncIterator, Callable, Generator, TypeVar
 
 from mcp.server.fastmcp import FastMCP, Context
 from pydantic import BaseModel
@@ -200,6 +201,33 @@ def dispatched(
     eff = dispatcher.prepare(tool_name, session_overlay=overlay)
     with using_conversion_graph(eff.unit_system):
         yield eff
+
+
+_ToolFn = TypeVar("_ToolFn", bound=Callable[..., object])
+
+
+def _dispatched_tool(tool_name: str) -> Callable[[_ToolFn], _ToolFn]:
+    """Decorator: route a tool through `dispatched(tool_name, ctx)`.
+
+    Reads `ctx` from the wrapped call's kwargs (FastMCP injects it as a
+    keyword argument; tests pass it the same way) and runs the body
+    inside the dispatcher's context manager. The gate is consulted
+    before the body executes; `eff.unit_system` becomes the ambient
+    graph. Tools that need direct access to `eff` (to layer inline
+    definitions on the resolved graph) should use the explicit
+    `with dispatched(...) as eff:` form instead.
+    """
+
+    def deco(fn: _ToolFn) -> _ToolFn:
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            ctx = kwargs.get("ctx")
+            with dispatched(tool_name, ctx):
+                return fn(*args, **kwargs)
+
+        return wrapper  # type: ignore[return-value]
+
+    return deco
 
 
 def _all_known_dimensions(session: SessionState | None = None) -> dict[str, "Dimension"]:
@@ -597,6 +625,7 @@ def convert(
 
 
 @mcp.tool()
+@_dispatched_tool("list_units")
 def list_units(
     dimension: str | None = None,
     ctx: Context | None = None,
@@ -685,7 +714,8 @@ def list_units(
 
 
 @mcp.tool()
-def list_scales() -> list[ScaleInfo]:
+@_dispatched_tool("list_scales")
+def list_scales(ctx: Context | None = None) -> list[ScaleInfo]:
     """
     List available scale prefixes for units.
 
@@ -717,6 +747,7 @@ def list_scales() -> list[ScaleInfo]:
 
 
 @mcp.tool()
+@_dispatched_tool("check_dimensions")
 def check_dimensions(
     unit_a: str,
     unit_b: str,
@@ -760,6 +791,7 @@ def check_dimensions(
 
 
 @mcp.tool()
+@_dispatched_tool("compute")
 def compute(
     initial_value: float,
     initial_unit: str,
@@ -1181,6 +1213,7 @@ def _build_product_from_accum(
 
 
 @mcp.tool()
+@_dispatched_tool("list_dimensions")
 def list_dimensions(ctx: Context | None = None) -> list[str]:
     """
     List available physical dimensions.
@@ -1204,6 +1237,7 @@ def list_dimensions(ctx: Context | None = None) -> list[str]:
 
 
 @mcp.tool()
+@_dispatched_tool("list_constants")
 def list_constants(
     category: str | None = None,
     ctx: Context | None = None,
@@ -1255,6 +1289,7 @@ def list_constants(
 
 
 @mcp.tool()
+@_dispatched_tool("define_constant")
 def define_constant(
     symbol: str,
     name: str,
@@ -1368,6 +1403,7 @@ def define_constant(
 
 
 @mcp.tool()
+@_dispatched_tool("define_unit")
 def define_unit(
     name: str,
     dimension: str,
@@ -1473,6 +1509,7 @@ def define_unit(
 
 
 @mcp.tool()
+@_dispatched_tool("define_conversion")
 def define_conversion(
     src: str,
     dst: str,
@@ -1531,6 +1568,7 @@ def define_conversion(
 
 
 @mcp.tool()
+@_dispatched_tool("reset_session")
 def reset_session(ctx: Context | None = None) -> SessionResult:
     """
     Reset the session, clearing all custom units, conversions, and constants.
@@ -1734,6 +1772,7 @@ def _build_scale_conversion_factor(
 
 
 @mcp.tool()
+@_dispatched_tool("decompose")
 def decompose(
     query: str | None = None,
     initial_unit: str | None = None,
@@ -2527,7 +2566,8 @@ def _compute_bridging_factors(
 
 
 @mcp.tool()
-def list_formulas() -> list[FormulaInfoResponse]:
+@_dispatched_tool("list_formulas")
+def list_formulas(ctx: Context | None = None) -> list[FormulaInfoResponse]:
     """
     List all registered domain formulas with their dimensional constraints.
 
@@ -2623,9 +2663,11 @@ def _simplify_formula_unit(result: Number) -> Number:
 
 
 @mcp.tool()
+@_dispatched_tool("call_formula")
 def call_formula(
     name: str,
     parameters: dict[str, dict],
+    ctx: Context | None = None,
 ) -> FormulaResult | FormulaError:
     """
     Call a registered formula with the given parameters.
@@ -3160,6 +3202,7 @@ def _parse_dimension_to_vector(
 
 
 @mcp.tool()
+@_dispatched_tool("define_quantity_kind")
 def define_quantity_kind(
     name: str,
     dimension: str,
@@ -3261,6 +3304,7 @@ def define_quantity_kind(
 
 
 @mcp.tool()
+@_dispatched_tool("declare_computation")
 def declare_computation(
     quantity_kind: str,
     expected_unit: str,
@@ -3370,6 +3414,7 @@ def declare_computation(
 
 
 @mcp.tool()
+@_dispatched_tool("validate_result")
 def validate_result(
     value: float,
     unit: str,
@@ -3491,6 +3536,7 @@ def validate_result(
 
 
 @mcp.tool()
+@_dispatched_tool("list_quantity_kinds")
 def list_quantity_kinds(
     dimension: str | None = None,
     category: str | None = None,
@@ -3553,6 +3599,7 @@ def list_quantity_kinds(
 
 
 @mcp.tool()
+@_dispatched_tool("extend_basis")
 def extend_basis(
     name: str,
     base: str = "SI",
@@ -3700,6 +3747,7 @@ def extend_basis(
 
 
 @mcp.tool()
+@_dispatched_tool("list_extended_bases")
 def list_extended_bases(
     ctx: Context | None = None,
 ) -> list[dict]:

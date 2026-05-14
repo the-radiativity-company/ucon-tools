@@ -100,7 +100,14 @@ class DefaultSessionState:
     """
 
     def __init__(self, base_graph: "ConversionGraph | None" = None):
-        self._base_graph = base_graph
+        # Capture the default graph eagerly so subsequent `reset()` calls
+        # restore to the same base regardless of any active ambient
+        # `using_conversion_graph` context (which `get_default_graph()`
+        # honors when consulted later).
+        if base_graph is None:
+            from ucon.graph import get_default_graph
+            base_graph = get_default_graph()
+        self._base_graph: "ConversionGraph" = base_graph
         self._graph: "ConversionGraph | None" = None
         self._constants: dict[str, "Constant"] = {}
         self._quantity_kinds: dict[str, "QuantityKindInfo"] = {}
@@ -115,9 +122,7 @@ class DefaultSessionState:
         the session graph for subsequent calls.
         """
         if self._graph is None:
-            from ucon.graph import get_default_graph
-            base = self._base_graph or get_default_graph()
-            self._graph = base.copy()
+            self._graph = self._base_graph.copy()
         return self._graph
 
     def get_constants(self) -> dict[str, "Constant"]:
@@ -175,9 +180,7 @@ class DefaultSessionState:
 
         Creates a fresh copy of the base graph and clears all session state.
         """
-        from ucon.graph import get_default_graph
-        base = self._base_graph or get_default_graph()
-        self._graph = base.copy()
+        self._graph = self._base_graph.copy()
         self._constants = {}
         self._quantity_kinds = {}
         self._active_computation = None
