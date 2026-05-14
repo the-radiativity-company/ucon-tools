@@ -6,11 +6,12 @@
 #   ucon-mcp              # Run via entry point
 #   python -m ucon.mcp    # Run as module
 
+import functools
 import hashlib
 import json
 import re
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, AsyncIterator
+from contextlib import asynccontextmanager, contextmanager
+from typing import TYPE_CHECKING, AsyncIterator, Callable, Generator, TypeVar
 
 from mcp.server.fastmcp import FastMCP, Context
 from pydantic import BaseModel
@@ -19,7 +20,10 @@ from ucon import Dimension, get_default_graph
 from ucon.dimension import all_dimensions
 from ucon.core import Number, Scale, Unit, UnitProduct
 from ucon import parse_unit
-from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_graph
+from ucon.basis.graph import get_basis_graph
+from ucon.basis.transforms import BasisTransform
+from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_conversion_graph
+from ucon.system import UnitSystem, use as use_system
 from ucon.maps import LinearMap
 from ucon.tools.mcp.formulas import list_formulas as _list_formulas, get_formula
 from ucon.tools.mcp.koq import (
@@ -42,13 +46,76 @@ from ucon.tools.mcp.suggestions import (
     build_no_path_error,
     build_unknown_dimension_error,
 )
+from ucon.tools.mcp.system import (
+    CallerIdentity,
+    CapabilityNotAvailable,
+    Dispatcher,
+    EffectiveCapabilities,
+    ENV_PROFILE,
+    ENV_SYSTEM,
+    OperatorOverlayPolicy,
+    OperatorState,
+    ProcessBase,
+    SessionOverlayPolicy,
+    SessionStateOverlay,
+    StartupConfig,
+    StderrJsonSink,
+    SystemClock,
+    TIER_CONFIGS,
+)
 from ucon.packages import EdgeDef, PackageLoadError, UnitDef
+
+
+def _build_dispatcher(config: StartupConfig | None = None) -> Dispatcher:
+    """Construct the process-wide `Dispatcher`.
+
+    Snapshots the registered tool roster and formula registry at call
+    time (via `ProcessBase.from_globals()`), uses ucon's default graph
+    as the base unit system, and pairs both shipped overlay policies
+    with `TIER_CONFIGS`.
+
+    The optional ``config`` argument carries operator-supplied startup
+    knobs:
+
+    - ``config.profile`` becomes ``default_identity.tier`` (forward-
+      compat hook for transport-less callers; v0.5.0 still uses the
+      ``"local"`` principal).
+    - ``config.system`` is stamped onto ``ProcessBase.catalog`` for
+      future ``UnitSystem`` catalog resolution. v0.5.0 does not
+      consult the value at runtime.
+    - ``config.tier_header`` is currently unused at build time;
+      consumed by future transport-level identity extraction.
+
+    When ``config`` is omitted, defaults preserve v0.4.x behavior:
+    ``StartupConfig()`` → ``"standard"`` profile, ``catalog=None``.
+    """
+    cfg = config if config is not None else StartupConfig()
+    return Dispatcher(
+        process_base=ProcessBase.from_globals(catalog=cfg.system),
+        operator_state=OperatorState(),
+        policies={
+            "session": SessionOverlayPolicy(),
+            "operator": OperatorOverlayPolicy(),
+        },
+        tier_configs=TIER_CONFIGS,
+        clock=SystemClock(),
+        sink=StderrJsonSink(),
+        default_identity=CallerIdentity(tier=cfg.profile, principal="local"),
+    )
 
 
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
-    """Server lifespan - creates session state that persists across tool calls."""
-    yield {"session": DefaultSessionState()}
+    """Server lifespan - creates per-process state shared across tool calls.
+
+    Yields a dict containing:
+    - ``"session"``: a `DefaultSessionState` for per-server mutable session state.
+    - ``"dispatcher"``: the process-wide tier-driven `Dispatcher`.
+    """
+    yield {
+        "session": DefaultSessionState(),
+        "dispatcher": _build_dispatcher(_get_startup_config()),
+    }
 
 
 mcp = FastMCP("ucon", lifespan=lifespan)
@@ -92,6 +159,151 @@ def _reset_fallback_session() -> None:
     global _fallback_session
     if _fallback_session is not None:
         _fallback_session.reset()
+
+
+# -----------------------------------------------------------------------------
+# Dispatcher access
+# -----------------------------------------------------------------------------
+
+_fallback_dispatcher: Dispatcher | None = None
+_startup_config: StartupConfig | None = None
+
+
+def _get_dispatcher(ctx: Context | None) -> Dispatcher:
+    """Extract the process-wide `Dispatcher` from request context.
+
+    Falls back to a lazily constructed dispatcher for direct function
+    calls (testing without an MCP context).
+    """
+    if ctx is not None and hasattr(ctx, "request_context"):
+        lifespan_ctx = ctx.request_context.lifespan_context
+        if lifespan_ctx and "dispatcher" in lifespan_ctx:
+            return lifespan_ctx["dispatcher"]
+    return _get_fallback_dispatcher()
+
+
+def _get_fallback_dispatcher() -> Dispatcher:
+    """Get or create the fallback dispatcher for direct function calls.
+
+    Honors the active `StartupConfig` (if any) so direct-call tests and
+    early lifecycle inspection see the same dispatcher the SSE/stdio
+    runtime would build.
+    """
+    global _fallback_dispatcher
+    if _fallback_dispatcher is None:
+        _fallback_dispatcher = _build_dispatcher(_get_startup_config())
+    return _fallback_dispatcher
+
+
+def _reset_fallback_dispatcher() -> None:
+    """Reset the fallback dispatcher (for testing)."""
+    global _fallback_dispatcher
+    _fallback_dispatcher = None
+
+
+# -----------------------------------------------------------------------------
+# Startup configuration singleton
+# -----------------------------------------------------------------------------
+
+def _get_startup_config() -> StartupConfig | None:
+    """Return the operator-supplied `StartupConfig`, if any.
+
+    `None` indicates no operator overrides have been applied; callers
+    should treat that as equivalent to ``StartupConfig()`` (the v0.4.x
+    defaults).
+    """
+    return _startup_config
+
+
+def _set_startup_config(config: StartupConfig | None) -> None:
+    """Install the process-wide `StartupConfig`.
+
+    Resets the fallback dispatcher so the next direct call rebuilds
+    with the new config. The lifespan-bound dispatcher constructed by
+    `lifespan` reads `_get_startup_config()` at server start, so this
+    setter must run before `mcp.run(...)` to take effect for the
+    transport-bound dispatcher.
+    """
+    global _startup_config
+    _startup_config = config
+    _reset_fallback_dispatcher()
+
+
+def _reset_startup_config() -> None:
+    """Clear the process-wide `StartupConfig` (testing helper)."""
+    _set_startup_config(None)
+
+
+@contextmanager
+def dispatched(
+    tool_name: str,
+    ctx: Context | None = None,
+) -> Generator[EffectiveCapabilities, None, None]:
+    """Resolve effective capabilities for one tool call and enter its system context.
+
+    Pulls the per-request `Dispatcher` and `SessionState` from `ctx`,
+    wraps the session as a `SessionStateOverlay`, calls
+    `Dispatcher.prepare(tool_name, session_overlay=overlay)`, and enters
+    two nested ucon contexts:
+
+    1. ``with use(eff.unit_system):`` — activates the v1.8
+       :class:`~ucon.system.UnitSystem` so reach-through paths
+       (basis graph, constants, ``active()`` consumers, the algebra
+       cache) see the resolved system.
+    2. ``with using_conversion_graph(eff.unit_system.conversions):``
+       — pins the conversion-graph ContextVar so ``get_default_graph``
+       and parsing-graph callers see the dispatcher-resolved graph.
+
+    Both windows are needed: ``use(...)`` alone is not consulted by
+    ``ucon.graph.get_default_graph`` (which checks only the
+    conversion-graph ContextVar / module default), and
+    ``using_conversion_graph(...)`` alone bypasses the v1.8
+    ``UnitSystem`` activation.
+
+    Yields the `EffectiveCapabilities` so the tool body can read
+    ``eff.audit`` (and ``eff.unit_system`` / ``eff.unit_system.conversions``).
+
+    Raises
+    ------
+    CapabilityNotAvailable
+        Raised by `Dispatcher.prepare` if `tool_name` is not in
+        ``eff.tools`` for the resolved tier.
+    """
+    dispatcher = _get_dispatcher(ctx)
+    session = _get_session(ctx)
+    overlay = SessionStateOverlay(session=session)
+    eff = dispatcher.prepare(tool_name, session_overlay=overlay)
+    with use_system(eff.unit_system), using_conversion_graph(
+        eff.unit_system.conversions
+    ):
+        yield eff
+
+
+_ToolFn = TypeVar("_ToolFn", bound=Callable[..., object])
+
+
+def _dispatched_tool(tool_name: str) -> Callable[[_ToolFn], _ToolFn]:
+    """Decorator: route a tool through `dispatched(tool_name, ctx)`.
+
+    Reads `ctx` from the wrapped call's kwargs (FastMCP injects it as a
+    keyword argument; tests pass it the same way) and runs the body
+    inside the dispatcher's context manager. The gate is consulted
+    before the body executes; `eff.unit_system` becomes the ambient
+    graph. Tools that need direct access to `eff` (to layer inline
+    definitions on the resolved graph) should use the explicit
+    `with dispatched(...) as eff:` form instead.
+    """
+
+    def deco(fn: _ToolFn) -> _ToolFn:
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            ctx = kwargs.get("ctx")
+            with dispatched(tool_name, ctx):
+                return fn(*args, **kwargs)
+
+        return wrapper  # type: ignore[return-value]
+
+    return deco
 
 
 def _all_known_dimensions(session: SessionState | None = None) -> dict[str, "Dimension"]:
@@ -438,37 +650,41 @@ def convert(
             custom_units=[{"name": "slug", "dimension": "mass", "aliases": ["slug"]}],
             custom_edges=[{"src": "slug", "dst": "kg", "factor": 14.5939}])
     """
-    session = _get_session(ctx)
-    session_graph = session.get_graph()
+    # Dispatcher resolves the effective unit_system (base + active bundles +
+    # session overlay) and enters it as the ambient system. Inline definitions
+    # layer on top of that resolved graph for this call only.
+    with dispatched("convert", ctx) as eff:
+        base_graph = eff.unit_system.conversions
 
-    # Build inline graph if custom definitions provided
-    inline_graph, err = _build_inline_graph(custom_units, custom_edges, session_graph)
-    if err:
-        return err
-
-    # Use inline graph or session graph
-    graph = inline_graph or session_graph
-
-    # Perform resolution and conversion within graph context
-    with using_graph(graph):
-        # 1. Parse source unit
-        src, err = resolve_unit(from_unit, parameter="from_unit")
+        # Build inline graph if custom definitions provided
+        inline_graph, err = _build_inline_graph(custom_units, custom_edges, base_graph)
         if err:
             return err
 
-        # 2. Parse target unit
-        dst, err = resolve_unit(to_unit, parameter="to_unit")
-        if err:
-            return err
+        # Use inline graph or the dispatcher-resolved graph
+        graph = inline_graph or base_graph
 
-        # 3. Perform conversion
-        try:
-            num = Number(quantity=value, unit=src)
-            result = num.to(dst, graph=graph)
-        except DimensionMismatch:
-            return build_dimension_mismatch_error(from_unit, to_unit, src, dst)
-        except ConversionNotFound as e:
-            return build_no_path_error(from_unit, to_unit, src, dst, e)
+        # Re-enter as ambient when an inline graph is in play (idempotent
+        # when graph is already the dispatched ambient).
+        with using_conversion_graph(graph):
+            # 1. Parse source unit
+            src, err = resolve_unit(from_unit, parameter="from_unit")
+            if err:
+                return err
+
+            # 2. Parse target unit
+            dst, err = resolve_unit(to_unit, parameter="to_unit")
+            if err:
+                return err
+
+            # 3. Perform conversion
+            try:
+                num = Number(quantity=value, unit=src)
+                result = num.to(dst, graph=graph)
+            except DimensionMismatch:
+                return build_dimension_mismatch_error(from_unit, to_unit, src, dst)
+            except ConversionNotFound as e:
+                return build_no_path_error(from_unit, to_unit, src, dst, e)
 
     # Use the target unit string as output (what the user asked for).
     # This handles cases like mg/kg → µg/kg where internal representation
@@ -485,6 +701,7 @@ def convert(
 
 
 @mcp.tool()
+@_dispatched_tool("list_units")
 def list_units(
     dimension: str | None = None,
     ctx: Context | None = None,
@@ -573,7 +790,8 @@ def list_units(
 
 
 @mcp.tool()
-def list_scales() -> list[ScaleInfo]:
+@_dispatched_tool("list_scales")
+def list_scales(ctx: Context | None = None) -> list[ScaleInfo]:
     """
     List available scale prefixes for units.
 
@@ -605,6 +823,7 @@ def list_scales() -> list[ScaleInfo]:
 
 
 @mcp.tool()
+@_dispatched_tool("check_dimensions")
 def check_dimensions(
     unit_a: str,
     unit_b: str,
@@ -628,7 +847,7 @@ def check_dimensions(
     graph = session.get_graph()
 
     # Resolve units within session graph context
-    with using_graph(graph):
+    with using_conversion_graph(graph):
         a, err = resolve_unit(unit_a, parameter="unit_a")
         if err:
             return err
@@ -648,6 +867,7 @@ def check_dimensions(
 
 
 @mcp.tool()
+@_dispatched_tool("compute")
 def compute(
     initial_value: float,
     initial_unit: str,
@@ -781,7 +1001,7 @@ def compute(
     graph = inline_graph or session_graph
 
     # All unit resolution within graph context
-    with using_graph(graph):
+    with using_conversion_graph(graph):
         # Parse initial unit
         initial_parsed, err = resolve_unit(initial_unit, parameter="initial_unit")
         if err:
@@ -1069,6 +1289,7 @@ def _build_product_from_accum(
 
 
 @mcp.tool()
+@_dispatched_tool("list_dimensions")
 def list_dimensions(ctx: Context | None = None) -> list[str]:
     """
     List available physical dimensions.
@@ -1092,6 +1313,7 @@ def list_dimensions(ctx: Context | None = None) -> list[str]:
 
 
 @mcp.tool()
+@_dispatched_tool("list_constants")
 def list_constants(
     category: str | None = None,
     ctx: Context | None = None,
@@ -1143,6 +1365,7 @@ def list_constants(
 
 
 @mcp.tool()
+@_dispatched_tool("define_constant")
 def define_constant(
     symbol: str,
     name: str,
@@ -1256,6 +1479,7 @@ def define_constant(
 
 
 @mcp.tool()
+@_dispatched_tool("define_unit")
 def define_unit(
     name: str,
     dimension: str,
@@ -1361,6 +1585,7 @@ def define_unit(
 
 
 @mcp.tool()
+@_dispatched_tool("define_conversion")
 def define_conversion(
     src: str,
     dst: str,
@@ -1419,6 +1644,7 @@ def define_conversion(
 
 
 @mcp.tool()
+@_dispatched_tool("reset_session")
 def reset_session(ctx: Context | None = None) -> SessionResult:
     """
     Reset the session, clearing all custom units, conversions, and constants.
@@ -1598,7 +1824,7 @@ def _build_scale_conversion_factor(
     """
     # Get the conversion factor
     try:
-        with using_graph(graph):
+        with using_conversion_graph(graph):
             conv_map = graph.convert(src=src_unit, dst=dst_unit)
 
         if hasattr(conv_map, 'a'):
@@ -1622,6 +1848,7 @@ def _build_scale_conversion_factor(
 
 
 @mcp.tool()
+@_dispatched_tool("decompose")
 def decompose(
     query: str | None = None,
     initial_unit: str | None = None,
@@ -1777,7 +2004,7 @@ def _decompose_query_mode(
 
     source_str, target_str = parts[0].strip(), parts[1].strip()
 
-    with using_graph(graph):
+    with using_conversion_graph(graph):
         initial_value = None
         initial_unit_str = source_str
 
@@ -1819,7 +2046,7 @@ def _decompose_query_mode(
 
     if isinstance(source_unit, UnitProduct) or isinstance(target_unit, UnitProduct):
         try:
-            with using_graph(graph):
+            with using_conversion_graph(graph):
                 conv_map = graph.convert(src=source_unit, dst=target_unit)
 
             if hasattr(conv_map, 'a'):
@@ -1855,7 +2082,7 @@ def _decompose_query_mode(
         if path is None:
             # No BFS path found — try graph.convert() which may use bridge edges
             try:
-                with using_graph(graph):
+                with using_conversion_graph(graph):
                     conv_map = graph.convert(src=source_unit, dst=target_unit)
 
                 if hasattr(conv_map, 'a'):
@@ -1915,7 +2142,7 @@ def _decompose_structured_mode(
     4. Uses a constraint solver to determine optimal placement
     5. Adds bridging factors for unit-level mismatches (e.g., mcg→mg, min→h)
     """
-    with using_graph(graph):
+    with using_conversion_graph(graph):
         # Parse initial unit
         initial_parsed, err = resolve_unit(initial_unit_str, parameter="initial_unit")
         if err:
@@ -1948,7 +2175,7 @@ def _decompose_structured_mode(
         value = qty["value"]
         unit_str = qty.get("unit", "ea")
 
-        with using_graph(graph):
+        with using_conversion_graph(graph):
             qty_unit, err = resolve_unit(unit_str, parameter=f"known_quantities[{i}].unit")
             if err:
                 return err
@@ -2268,7 +2495,7 @@ def _compute_bridging_factors(
         denom_str = factor["denominator"]
 
         if num_str != "ea":
-            with using_graph(graph):
+            with using_conversion_graph(graph):
                 num_unit, _ = resolve_unit(num_str, parameter="numerator")
                 if num_unit:
                     _accumulate_factors(accum, num_unit, +1.0)
@@ -2280,7 +2507,7 @@ def _compute_bridging_factors(
             else:
                 denom_unit_str = denom_str
 
-            with using_graph(graph):
+            with using_conversion_graph(graph):
                 denom_unit, _ = resolve_unit(denom_unit_str, parameter="denominator")
                 if denom_unit:
                     _accumulate_factors(accum, denom_unit, -1.0)
@@ -2327,7 +2554,7 @@ def _compute_bridging_factors(
                 paired_dims.add(dim_name)
                 # Compute scale ratio: pos_unit / neg_unit (in base units)
                 try:
-                    with using_graph(graph):
+                    with using_conversion_graph(graph):
                         conv_map = graph.convert(src=pos_uf.unit, dst=neg_uf.unit)
                     if hasattr(conv_map, 'a'):
                         base_scale = float(conv_map.a)
@@ -2372,7 +2599,7 @@ def _compute_bridging_factors(
                     continue  # Same unit — no bridging needed
 
                 try:
-                    with using_graph(graph):
+                    with using_conversion_graph(graph):
                         conv_map = graph.convert(src=cur_uf.unit, dst=tgt_uf.unit)
                     if hasattr(conv_map, 'a'):
                         base_scale = float(conv_map.a)
@@ -2415,7 +2642,8 @@ def _compute_bridging_factors(
 
 
 @mcp.tool()
-def list_formulas() -> list[FormulaInfoResponse]:
+@_dispatched_tool("list_formulas")
+def list_formulas(ctx: Context | None = None) -> list[FormulaInfoResponse]:
     """
     List all registered domain formulas with their dimensional constraints.
 
@@ -2511,9 +2739,11 @@ def _simplify_formula_unit(result: Number) -> Number:
 
 
 @mcp.tool()
+@_dispatched_tool("call_formula")
 def call_formula(
     name: str,
     parameters: dict[str, dict],
+    ctx: Context | None = None,
 ) -> FormulaResult | FormulaError:
     """
     Call a registered formula with the given parameters.
@@ -3048,6 +3278,7 @@ def _parse_dimension_to_vector(
 
 
 @mcp.tool()
+@_dispatched_tool("define_quantity_kind")
 def define_quantity_kind(
     name: str,
     dimension: str,
@@ -3149,6 +3380,7 @@ def define_quantity_kind(
 
 
 @mcp.tool()
+@_dispatched_tool("declare_computation")
 def declare_computation(
     quantity_kind: str,
     expected_unit: str,
@@ -3258,6 +3490,7 @@ def declare_computation(
 
 
 @mcp.tool()
+@_dispatched_tool("validate_result")
 def validate_result(
     value: float,
     unit: str,
@@ -3379,6 +3612,7 @@ def validate_result(
 
 
 @mcp.tool()
+@_dispatched_tool("list_quantity_kinds")
 def list_quantity_kinds(
     dimension: str | None = None,
     category: str | None = None,
@@ -3441,6 +3675,7 @@ def list_quantity_kinds(
 
 
 @mcp.tool()
+@_dispatched_tool("extend_basis")
 def extend_basis(
     name: str,
     base: str = "SI",
@@ -3569,6 +3804,24 @@ def extend_basis(
     )
     session.register_extended_basis(basis_info)
 
+    # Register a ``parent -> runtime_basis`` zero-pad embedding in the
+    # active basis graph so that ``unify`` (and therefore the algebraic
+    # path through ``multiply_via`` / ``divide_via``) can lift parent
+    # vectors into the extended basis when composing with extended units.
+    # See ucon#247 — without these edges, arithmetic between a unit on
+    # ``runtime_basis`` and a unit on the parent raises ``BasisMismatch``.
+    # The reverse projection (extended -> parent) is registered too so
+    # that ``unify`` also accepts the symmetric direction; the projection
+    # will raise ``LossyProjection`` if a non-zero added component is
+    # asked to drop, which is the correct unification behavior.
+    if new_components:
+        graph = get_basis_graph()
+        forward = BasisTransform.append_components_embedding(
+            parent_basis, runtime_basis,
+        )
+        graph.add_transform(forward)
+        graph.add_transform(forward.embedding())
+
     new_dim_names = [d.name for d in runtime_dims if d.name is not None]
     if new_dim_names:
         msg = (
@@ -3588,6 +3841,7 @@ def extend_basis(
 
 
 @mcp.tool()
+@_dispatched_tool("list_extended_bases")
 def list_extended_bases(
     ctx: Context | None = None,
 ) -> list[dict]:
@@ -3631,9 +3885,17 @@ def main():
     """Run the ucon MCP server.
 
     Usage:
-        ucon-mcp              # stdio mode (default)
-        ucon-mcp --sse        # SSE mode on port 8000
-        ucon-mcp --sse --port 3000  # SSE mode on custom port
+        ucon-mcp                          # stdio mode (default)
+        ucon-mcp --sse                    # SSE mode on port 8000
+        ucon-mcp --sse --port 3000        # SSE mode on custom port
+        ucon-mcp --profile preview        # opt the default identity into the preview tier
+        ucon-mcp --system NAME            # stamp a forward-compat catalog name on ProcessBase
+        UCON_PROFILE=preview ucon-mcp     # same via environment
+
+    Resolution layering for the startup knobs (highest precedence first):
+    CLI flags > environment variables > field defaults. Absent both,
+    behavior matches v0.4.x: standard profile, no catalog, no tier
+    header.
     """
     import argparse
 
@@ -3657,7 +3919,47 @@ def main():
         default="127.0.0.1",
         help="Host for SSE mode (default: 127.0.0.1)",
     )
+    parser.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        choices=sorted(TIER_CONFIGS),
+        help=(
+            "Default identity tier for the dispatcher "
+            f"(env: {ENV_PROFILE}). Defaults to 'standard'."
+        ),
+    )
+    parser.add_argument(
+        "--system",
+        type=str,
+        default=None,
+        help=(
+            "Forward-compat UnitSystem catalog name stamped on "
+            f"ProcessBase.catalog (env: {ENV_SYSTEM}). Not resolved at "
+            "runtime in v0.5.0."
+        ),
+    )
+    parser.add_argument(
+        "--tier-header",
+        type=str,
+        default=None,
+        dest="tier_header",
+        help=(
+            "Forward-compat transport header name to extract caller "
+            "tier from. Parsed and stored on StartupConfig; not "
+            "consumed at runtime in v0.5.0."
+        ),
+    )
     args = parser.parse_args()
+
+    # Resolve startup config: CLI flags override env-derived values.
+    env_config = StartupConfig.from_env()
+    startup = env_config.with_overrides(
+        profile=args.profile if args.profile is not None else env_config.profile,
+        system=args.system if args.system is not None else env_config.system,
+        tier_header=args.tier_header,
+    )
+    _set_startup_config(startup)
 
     if args.sse:
         # Configure SSE settings

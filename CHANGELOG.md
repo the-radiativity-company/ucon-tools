@@ -7,6 +7,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-14
+
+Ships the v1.8 `UnitSystem` substrate through the MCP tool surface and
+factors the server so a single binary can run as two operational
+profiles under tier-driven dispatch. Every tool call now routes
+through an explicit capability-resolution step before invocation.
+
+### Added
+
+- **Tiered capability framework (`ucon.tools.mcp.system`).** Two
+  profiles ship: **STANDARD** (Type A — per-session mutable
+  `UnitSystem`, default) and **PREVIEW** (Type B — operator-pinned
+  read-only sessions with lease-bounded bundles). Both reduce to
+  *process base + operator overlays + optional session overlay*
+  composed through `OverlayPolicy.resolve(...)` and dispatched via
+  `with use(...)` from ucon 1.8. New public value types:
+  - `ProcessBase` — frozen
+    `(unit_system, tools, formulas, catalog)`. Default constructor
+    `ProcessBase.from_globals()` preserves v0.4.x behaviour.
+  - `CapabilityBundle` — frozen
+    `(name, version, provenance, unit_packages, constants, tools,
+    formulas, expires_at, restrictions)`. `restrictions` is reserved
+    for v2 and rejected at activation.
+  - `EffectiveCapabilities` — frozen output of
+    `OverlayPolicy.resolve(...)`.
+  - `SessionOverlay` Protocol — per-session delta consumed by
+    `OperatorOverlayPolicy` when `tier_config.mutation_allowed`.
+  - `OverlayPolicy` Protocol with two concretes:
+    `SessionOverlayPolicy` (STANDARD) and `OperatorOverlayPolicy`
+    (PREVIEW).
+  - `CallerIdentity` — `(tier, principal, roles=frozenset())`;
+    `roles` is the v0.5.x deferral seam.
+  - `TierConfig` — `(name, eligible_bundles, default_lease,
+    max_lease, overlay_policy, mutation_allowed)`. Two values ship:
+    `PREVIEW` and `STANDARD`.
+  - `ActiveBundle` — activation wrapper
+    `(bundle, tier, activated_at, expires_at, activator,
+    lease_clamped_from)`.
+  - `OperatorState` — single mutable surface; `RLock`-guarded.
+    Methods: `activate`, `deactivate`, `deactivate_versioned`,
+    `active_for`, `reap_expired`.
+  - `BundleCatalog` Protocol, `StaticCatalog`, and `DEFAULT_CATALOG`
+    containing exactly `CORE_BUNDLE`.
+  - `Clock` Protocol, `SystemClock`, `FixedClock`.
+  - `AuditSink` Protocol, `StderrJsonSink`, `AuditRecord`.
+- **Operator entry points** — `activate_bundle(...)` and
+  `deactivate_bundle(...)`. Both keyword-only, version-pinned,
+  lease-clamped. `deactivate_bundle` is idempotent on a no-op path.
+- **Dispatch wiring.** Every tool call resolves
+  `EffectiveCapabilities` for the caller's tier, runs
+  `operator_state.reap_expired(now)` once per request, gates with
+  `CapabilityNotAvailable` if `request.tool not in eff.tools`, and
+  executes under `with use(eff.unit_system)`. A `Dispatcher`
+  constructed in the FastMCP lifespan hook is the single conduit for
+  capability requests; the pattern is applied uniformly across
+  `convert` and the remaining tool surface.
+- **Startup hooks.** `--system` / `UCON_SYSTEM` selects a named
+  process-base configuration (TOML); `--profile` / `UCON_PROFILE`
+  selects `preview` vs `standard` as the default tier when no
+  transport claim is available; `--tier-header` overrides the
+  `X-Ucon-Tier` header name (placeholder until v0.5.x authenticated
+  transport binding).
+- **`extend_basis` registers a parent ↔ extended embedding pair**
+  in the active `BasisGraph` via the new ucon
+  `BasisTransform.append_components_embedding(parent, extended)`.
+  Composing a unit defined on the extended basis (e.g. `USD`) with a
+  unit on the parent (e.g. `s`) now lifts through `unify` instead of
+  raising `BasisMismatch`. The reverse projection (extended →
+  parent) is registered too and raises `LossyProjection` when a
+  non-zero added component would be dropped — the correct
+  unification behavior. Closes ucon#247 on the consumer side.
+- `tests/ucon/tools/mcp/system/test_startup.py` — coverage for the
+  new `--system` / `--profile` / `--tier-header` resolution paths.
+- `TestCrossBasisArithmeticAfterExtend` in
+  `tests/ucon/tools/mcp/test_extended_basis_dimensions.py` — three
+  regressions for §8.1 (Phase 2.5 `compute` over `USD·s`,
+  Phase 2.1 `declare_computation` over `USD/year`, SI-only
+  no-regression).
+
+### Changed
+
+- **Bumped minimum `ucon` to 1.8.2** (was 1.7.0). Picks up the
+  v1.8 `UnitSystem` value type, the
+  `conversions` → `conversion_graph` API correction, and
+  `BasisTransform.append_components_embedding` — all consumed by
+  this release.
+- **`using_graph` → `using_conversion_graph` migration** across the
+  one import and 13 call sites in `ucon/tools/mcp/server.py`.
+- **`SessionState.get_graph` / `set_graph` / `reset` route through
+  `SessionOverlayPolicy`.** The Protocol surface and
+  `DefaultSessionState` attribute names are unchanged; internals
+  move.
+- **Tool registry declarations** carry a
+  `capabilities: tuple[str, ...]` field consumed by the dispatch
+  "is the tool in `eff.tools`?" check.
+
+### Fixed
+
+- **Cross-basis composition after `extend_basis` no longer raises
+  `BasisMismatch`.** The MCP tool surface now registers the parent
+  ↔ extended embedding at basis-creation time, so the algebraic
+  path through `multiply_via` / `divide_via` finds a clean
+  projection in the active `BasisGraph`. Requires the
+  corresponding ucon 1.8.2 helper.
+
+### Compatibility
+
+- Default startup with no flags is **STANDARD tier** with a process
+  base constructed via `ProcessBase.from_globals()` — preserving
+  v0.4.x observable behaviour for existing deployments.
+- No tool signature gains a required parameter. Existing evals pass
+  without consumer-side changes.
+
 ## [0.4.8] - 2026-05-10
 
 ### Changed

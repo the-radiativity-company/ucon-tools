@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from ucon.constants import Constant
     from ucon.dimension import Dimension
     from ucon.graph import ConversionGraph
+    from ucon.system import UnitSystem
     from ucon.tools.mcp.koq import ComputationDeclaration, ExtendedBasisInfo, QuantityKindInfo
 
 
@@ -39,6 +40,16 @@ class SessionState(Protocol):
 
     def get_graph(self) -> "ConversionGraph":
         """Get the session's conversion graph."""
+        ...
+
+    def get_unit_system(self) -> "UnitSystem":
+        """Get the session's :class:`~ucon.system.UnitSystem`.
+
+        The returned system wraps :meth:`get_graph` as its
+        ``conversions``; v1.8 reach-through paths (basis graph,
+        constants, contexts) read from the surrounding globals via
+        ``UnitSystem.from_globals``-style snapshotting.
+        """
         ...
 
     def get_constants(self) -> dict[str, "Constant"]:
@@ -100,7 +111,14 @@ class DefaultSessionState:
     """
 
     def __init__(self, base_graph: "ConversionGraph | None" = None):
-        self._base_graph = base_graph
+        # Capture the default graph eagerly so subsequent `reset()` calls
+        # restore to the same base regardless of any active ambient
+        # `using_conversion_graph` context (which `get_default_graph()`
+        # honors when consulted later).
+        if base_graph is None:
+            from ucon.graph import get_default_graph
+            base_graph = get_default_graph()
+        self._base_graph: "ConversionGraph" = base_graph
         self._graph: "ConversionGraph | None" = None
         self._constants: dict[str, "Constant"] = {}
         self._quantity_kinds: dict[str, "QuantityKindInfo"] = {}
@@ -115,10 +133,44 @@ class DefaultSessionState:
         the session graph for subsequent calls.
         """
         if self._graph is None:
-            from ucon.graph import get_default_graph
-            base = self._base_graph or get_default_graph()
-            self._graph = base.copy()
+            self._graph = self._base_graph.copy()
         return self._graph
+
+    def get_unit_system(self) -> "UnitSystem":
+        """Build a :class:`~ucon.system.UnitSystem` over the session graph.
+
+        The returned ``UnitSystem``'s ``conversions`` field is the
+        session's mutable graph (``self.get_graph()``); the other
+        registries (``units``, ``dimensions``, ``basis``,
+        ``base_units``, ``basis_graph``, ``contexts``, ``constants``)
+        are snapshotted from the ambient globals on each call.
+
+        Constructing fresh on each call keeps the value consistent with
+        in-place mutation of the session graph and with future
+        session-owned registries; the inner dicts are shared by
+        reference, so a long-lived ``UnitSystem`` captured by ``use(...)``
+        still observes subsequent session mutations.
+        """
+        # Deferred imports: `ucon.system` and friends sit above
+        # `ucon.tools.mcp.session` in the import DAG when imported
+        # via the MCP server.
+        from ucon._loader import get_constants, get_units
+        from ucon.basis.graph import get_basis_graph, get_default_basis
+        from ucon.dimension import _DIMENSION_ATTRS
+        from ucon.system import UnitSystem
+        from ucon import units as _units_module
+
+        graph = self.get_graph()
+        return UnitSystem(
+            basis=get_default_basis(),
+            units=get_units(),
+            dimensions=_DIMENSION_ATTRS,
+            base_units=_units_module.si,
+            conversions=graph,
+            basis_graph=get_basis_graph(),
+            contexts=getattr(graph, "_contexts", {}),
+            constants=get_constants(),
+        )
 
     def get_constants(self) -> dict[str, "Constant"]:
         """Get the session's custom constants dictionary."""
@@ -175,9 +227,7 @@ class DefaultSessionState:
 
         Creates a fresh copy of the base graph and clears all session state.
         """
-        from ucon.graph import get_default_graph
-        base = self._base_graph or get_default_graph()
-        self._graph = base.copy()
+        self._graph = self._base_graph.copy()
         self._constants = {}
         self._quantity_kinds = {}
         self._active_computation = None
