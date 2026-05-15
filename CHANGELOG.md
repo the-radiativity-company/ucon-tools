@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-05-15
+
+### Changed
+
+- **`_parse_dimension_to_vector` now delegates to ucon's core
+  `parse_dimension`.** The MCP layer previously carried its own
+  duplicate dimension grammar that only handled named dimensions, a
+  hand-rolled "compound" sub-grammar, and pure vector-notation strings.
+  Several bare-symbol forms the core parser already accepts were
+  rejected at the MCP boundary: `M^1`, `M¹`, `L^2`, `L¹`, `L^3`, `L³`,
+  and compound expressions mixing styles like `M*L/T^2`. The pure
+  vector-notation fast path is preserved (and its guard tightened to
+  exclude arithmetic operators), so canonical inputs like `M·L²·T⁻²`
+  still short-circuit without re-parsing.
+- **Fixes mis-parse of `M·L/T²`.** The vector-notation fast path
+  previously swallowed `/` together with `·` and produced an incorrect
+  signature with the denominator attached to the wrong factor. The
+  tightened guard now routes such mixed-glyph compound expressions
+  through the core parser, yielding the correct `M·L·T⁻²`.
+- **Extended-basis dimensions resolve via try-each-basis.** When the
+  default SI parse fails, the helper retries against each registered
+  runtime basis in declaration order before returning `None`.
+
 ## [0.5.1] - 2026-05-15
 
 Surfaces ucon 1.8.3's first-class `Unit.scalable` property through the
