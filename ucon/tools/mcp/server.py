@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from ucon import Dimension, get_default_graph
 from ucon.dimension import all_dimensions
 from ucon.core import Number, Scale, Unit, UnitProduct
-from ucon import parse_unit
+from ucon import parse_unit, parse_dimension
 from ucon.basis.graph import get_basis_graph
 from ucon.basis.transforms import BasisTransform
 from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_conversion_graph
@@ -3008,118 +3008,13 @@ def _format_exponent(symbol: str, exp: int) -> str:
     return f"{symbol}^{exp}"
 
 
-def _parse_compound_dimension(
-    expr: str,
-    known_vectors: dict[str, str],
-    extra_symbols: list[str] | None = None,
-) -> str | None:
-    """Parse compound dimension expressions like ``mass/time`` into vector notation.
+def _render_dimension_to_vector(dim: "Dimension") -> str:
+    """Render a Dimension as a canonical KOQ-ordered vector string.
 
-    Splits ``expr`` on the first ``/`` into numerator and denominator. Each side
-    can be a single dimension name or several joined by ``*``/``·``. Optional
-    ``^N`` exponents are supported on each term.
-
-    Only single-symbol base dimensions can compound; if any term is a composite
-    derived dimension (e.g., ``energy``) the function returns ``None``.
-
-    Parameters
-    ----------
-    expr : str
-        Dimension expression, e.g. ``"mass/time"``, ``"mass*length/time^2"``.
-    known_vectors : dict[str, str]
-        Mapping of lowercased dimension names to single-symbol vector strings.
-        Names whose values are composite (contain ``·``) are rejected.
-    extra_symbols : list[str] | None
-        Extended-basis symbols to include in canonical ordering after SI symbols.
-
-    Returns
-    -------
-    str | None
-        Canonical-ordered vector string, or ``None`` if parsing fails.
+    SI components are emitted first in canonical order (M, L, T, I, Θ, N, J);
+    components beyond the SI seven (e.g. ``information``/``B`` or any
+    extended-basis component) follow in basis-declaration order.
     """
-    import re
-
-    if "/" not in expr and "*" not in expr and "·" not in expr:
-        return None
-
-    if "/" in expr:
-        num_str, _, den_str = expr.partition("/")
-    else:
-        num_str, den_str = expr, ""
-
-    den_str = den_str.strip()
-    if den_str.startswith("(") and den_str.endswith(")"):
-        den_str = den_str[1:-1]
-
-    def _split_terms(s: str) -> list[str]:
-        if not s:
-            return []
-        return [t.strip() for t in re.split(r"[*·]", s) if t.strip()]
-
-    def _parse_term(term: str) -> tuple[str, int] | None:
-        # term may be like "mass" or "time^2"
-        m = re.match(r"^([A-Za-z_]+)(?:\^(-?\d+))?$", term)
-        if not m:
-            return None
-        name = m.group(1).lower()
-        exp = int(m.group(2)) if m.group(2) else 1
-        symbol = known_vectors.get(name)
-        if symbol is None:
-            return None
-        # Reject composite vectors (more than a single symbol).
-        if any(c in symbol for c in ["·", "²", "³", "⁻", "^"]):
-            return None
-        if len(symbol) > 2:  # extended symbols like "$" are 1 char; reject longer composites
-            return None
-        return symbol, exp
-
-    exponents: dict[str, int] = {}
-
-    for term in _split_terms(num_str):
-        parsed = _parse_term(term)
-        if parsed is None:
-            return None
-        sym, exp = parsed
-        exponents[sym] = exponents.get(sym, 0) + exp
-
-    for term in _split_terms(den_str):
-        parsed = _parse_term(term)
-        if parsed is None:
-            return None
-        sym, exp = parsed
-        exponents[sym] = exponents.get(sym, 0) - exp
-
-    si_order = ["M", "L", "T", "I", "Θ", "N", "J"]
-    extras = list(extra_symbols) if extra_symbols else []
-    seen = set(si_order)
-    full_order = list(si_order) + [s for s in extras if not (s in seen or seen.add(s))]
-    # Append any leftover symbols that weren't explicitly ordered
-    for sym in exponents:
-        if sym not in full_order:
-            full_order.append(sym)
-
-    components: list[str] = []
-    for sym in full_order:
-        exp = exponents.get(sym, 0)
-        if exp == 0:
-            continue
-        components.append(_format_exponent(sym, exp))
-
-    return "·".join(components) if components else "1"
-
-
-def _get_dimension_vector(unit) -> str:
-    """Get the dimensional vector signature for a unit.
-
-    Returns a string like "M·L²·T⁻²·N⁻¹" representing the dimensional
-    signature of the unit in canonical KOQ order. Components beyond the SI
-    seven (e.g. ``information``/``B`` or extended-basis components) are
-    appended in basis-iteration order after the SI canonical block.
-    """
-    if unit is None:
-        return "1"
-
-    dim = unit.dimension if hasattr(unit, 'dimension') else Dimension.none
     if dim == Dimension.none:
         return "1"
 
@@ -3165,6 +3060,21 @@ def _get_dimension_vector(unit) -> str:
             components.append(_format_exponent(symbol, exp))
 
     return "·".join(components) if components else "1"
+
+
+def _get_dimension_vector(unit) -> str:
+    """Get the dimensional vector signature for a unit.
+
+    Returns a string like "M·L²·T⁻²·N⁻¹" representing the dimensional
+    signature of the unit in canonical KOQ order. Components beyond the SI
+    seven (e.g. ``information``/``B`` or extended-basis components) are
+    appended in basis-iteration order after the SI canonical block.
+    """
+    if unit is None:
+        return "1"
+
+    dim = unit.dimension if hasattr(unit, 'dimension') else Dimension.none
+    return _render_dimension_to_vector(dim)
 
 
 def _normalize_dimension_vector(vector_str: str, session: SessionState | None = None) -> str:
@@ -3266,85 +3176,58 @@ def _parse_dimension_to_vector(
     dimension_str: str,
     session: SessionState | None = None,
 ) -> str | None:
-    """Parse a dimension string to a vector signature.
+    """Parse a dimension string to a canonical vector signature.
 
     Accepts:
+
     - Vector notation: ``"M·L²·T⁻²·N⁻¹"``
     - Human-readable named dimension: ``"energy"``, ``"mass"``
-    - Compound expression: ``"mass/time"``, ``"mass*length/time^2"``
-    - Bare symbol: ``"M"``, ``"L"``
+    - Compound expression: ``"mass/time"``, ``"mass*length/time^2"``,
+      ``"M*L/T^2"``, ``"M·L/T²"``
+    - Bare symbol with optional exponent: ``"M"``, ``"M^1"``, ``"M¹"``,
+      ``"L²"``, ``"L^2"``
     - Dimensionless: ``"dimensionless"``, ``"1"``, ``""``
 
     When ``session`` is provided, extended-basis component names and symbols
-    are accepted alongside the SI vocabulary.
+    are accepted alongside the SI vocabulary. The core ucon dimension
+    parser is consulted against each registered runtime basis.
 
     Returns the vector signature in canonical order, or ``None`` if parsing
-    fails.
+    fails against every candidate basis.
     """
-    # Dimensionless papercut
     stripped = dimension_str.strip()
-    if stripped == "" or stripped == "1" or stripped.lower() == "dimensionless":
+
+    # Dimensionless papercut. ucon's parse_dimension recognizes ``"1"`` but
+    # not ``""`` or ``"dimensionless"`` — fold both into the canonical form.
+    if stripped == "" or stripped.lower() == "dimensionless":
         return "1"
 
-    # If it's already in vector notation, normalize to canonical order.
-    if any(c in dimension_str for c in ["·", "²", "³", "⁻"]):
-        return _normalize_dimension_vector(dimension_str, session=session)
+    # Pure vector-notation fast path. Triggers only when the string contains
+    # canonical vector glyphs *and* no arithmetic operators — otherwise we
+    # have an algebraic expression like ``"M·L/T²"`` that must go through
+    # the parser, not the normalizer.
+    if (
+        any(c in stripped for c in ["·", "²", "³", "⁻"])
+        and not any(c in stripped for c in ["/", "*", "(", ")", "^"])
+    ):
+        return _normalize_dimension_vector(stripped, session=session)
 
-    # Pure-name and composite patterns. Names map to single-symbol vectors
-    # where possible so they participate in compound parsing.
-    known_vectors = {
-        # Pure dimensions
-        "energy": "M·L²·T⁻²",
-        "length": "L",
-        "mass": "M",
-        "time": "T",
-        "temperature": "Θ",
-        "amount_of_substance": "N",
-        "current": "I",
-        "luminosity": "J",
-        "luminous_intensity": "J",
-        "information": "B",
-        # Composite patterns
-        "energy/amount_of_substance": "M·L²·T⁻²·N⁻¹",
-        "energy/temperature": "M·L²·T⁻²·Θ⁻¹",
-        "energy/(temperature*amount_of_substance)": "M·L²·T⁻²·Θ⁻¹·N⁻¹",
-        "energy/(temperature·amount_of_substance)": "M·L²·T⁻²·Θ⁻¹·N⁻¹",
-    }
-
-    # Extended-basis component names → their symbols.
-    extra_symbols: list[str] = []
+    # Delegate to the core dimension parser. Try the SI default first; if
+    # the input references extended-basis symbols, retry against each
+    # registered runtime basis in declaration order.
+    bases_to_try: list = [None]
     if session is not None:
         for basis_info in session.get_extended_bases().values():
-            for comp_name, comp_symbol, _ in basis_info.additional_components:
-                if comp_symbol and comp_name:
-                    known_vectors.setdefault(comp_name.lower(), comp_symbol)
-                    if comp_symbol not in extra_symbols:
-                        extra_symbols.append(comp_symbol)
+            rb = getattr(basis_info, "runtime_basis", None)
+            if rb is not None:
+                bases_to_try.append(rb)
 
-    normalized = dimension_str.lower().replace(" ", "")
-    direct = known_vectors.get(normalized)
-    if direct is not None:
-        # Already canonical; pass through normalize to enforce ordering when
-        # an extended session may shift the canonical order.
-        if any(c in direct for c in ["·", "²", "³", "⁻"]):
-            return _normalize_dimension_vector(direct, session=session)
-        return direct
-
-    # Bare-symbol papercut (e.g. "M" or "$"). Match against the union of SI
-    # symbols and any extended symbols.
-    si_symbols = {"M", "L", "T", "I", "Θ", "N", "J", "B"}
-    candidate_symbols = si_symbols | set(extra_symbols)
-    if dimension_str.strip() in candidate_symbols:
-        return dimension_str.strip()
-
-    # Compound-expression fallback (e.g. "mass/time" → "M·T⁻¹"). Restricted to
-    # single-symbol bases; composite derived dims are rejected.
-    if "/" in dimension_str or "*" in dimension_str or "·" in dimension_str:
-        return _parse_compound_dimension(
-            dimension_str.replace(" ", ""),
-            known_vectors,
-            extra_symbols=extra_symbols,
-        )
+    for basis in bases_to_try:
+        try:
+            dim = parse_dimension(stripped, basis=basis)
+        except (ValueError, KeyError):
+            continue
+        return _render_dimension_to_vector(dim)
 
     return None
 
