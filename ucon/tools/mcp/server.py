@@ -732,14 +732,9 @@ def list_units(
         if dimension not in known_dims:
             return build_unknown_dimension_error(dimension, session=session)
 
-    # Units that accept SI scale prefixes
-    SCALABLE_UNITS = {
-        "meter", "gram", "second", "ampere", "kelvin", "mole", "candela",
-        "hertz", "newton", "pascal", "joule", "watt", "coulomb", "volt",
-        "farad", "ohm", "siemens", "weber", "tesla", "henry", "lumen",
-        "lux", "becquerel", "gray", "sievert", "katal",
-        "liter", "byte",
-    }
+    # Scalability is read directly from ``Unit.scalable`` (ucon ≥ 1.8.3).
+    # Catalog authors and session-unit declarers own this property; the MCP
+    # surface just reports it.
 
     result = []
     seen_names = set()
@@ -759,7 +754,7 @@ def list_units(
                     shorthand=obj.shorthand,
                     aliases=list(obj.aliases) if obj.aliases else [],
                     dimension=obj.dimension.name,
-                    scalable=obj.name in SCALABLE_UNITS,
+                    scalable=obj.scalable,
                 )
             )
 
@@ -782,7 +777,7 @@ def list_units(
                     shorthand=unit.shorthand or unit.name,
                     aliases=list(unit.aliases) if unit.aliases else [],
                     dimension=unit.dimension.name,
-                    scalable=False,  # Session units are not scalable by default
+                    scalable=unit.scalable,
                 )
             )
 
@@ -1484,6 +1479,7 @@ def define_unit(
     name: str,
     dimension: str,
     aliases: list[str] | None = None,
+    scalable: bool = True,
     ctx: Context | None = None,
 ) -> UnitDefinitionResult | ConversionError:
     """
@@ -1501,6 +1497,11 @@ def define_unit(
         dimension: Dimension name (e.g., "mass", "length"). Use list_dimensions()
             to see available dimensions.
         aliases: Optional list of shorthand symbols (e.g., ["slug"] or ["nmi", "NM"]).
+        scalable: Whether SI scale prefixes (k, M, m, μ, …) may attach to this
+            unit. Defaults to True. Set to False for symbols where prefix
+            attachment is meaningless (e.g., currency codes like "USD"
+            should not parse "kUSD" as kilo+USD; users should write the
+            quantity numerically instead).
 
     Returns:
         UnitDefinitionResult confirming the unit was registered.
@@ -1508,6 +1509,8 @@ def define_unit(
 
     Example:
         define_unit(name="slug", dimension="mass", aliases=["slug"])
+        define_unit(name="us_dollar", dimension="currency",
+                    aliases=["USD"], scalable=False)
     """
     aliases = aliases or []
 
@@ -1555,13 +1558,19 @@ def define_unit(
         # Session-scoped dimension from an extended basis — bypass UnitDef
         # (which only knows built-in dimensions) and construct Unit directly.
         dim_obj = session_dims[dimension]
-        unit = Unit(name=name, dimension=dim_obj, aliases=tuple(aliases))
+        unit = Unit(
+            name=name,
+            dimension=dim_obj,
+            aliases=tuple(aliases),
+            scalable=scalable,
+        )
     else:
         try:
             unit_def = UnitDef(
                 name=name,
                 dimension=dimension,
                 aliases=tuple(aliases),
+                scalable=scalable,
             )
             unit = unit_def.materialize()
         except PackageLoadError as e:
