@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from ucon import parse_unit
+from ucon import NonScalableError, parse_unit
 from ucon.parsing import ParseError
 from ucon.units import UnknownUnitError
 
@@ -36,8 +36,8 @@ class ConversionError(BaseModel):
     error : str
         Human-readable description of what went wrong.
     error_type : str
-        One of: "unknown_unit", "dimension_mismatch", "no_conversion_path",
-        "parse_error".
+        One of: "unknown_unit", "non_scalable_unit", "dimension_mismatch",
+        "no_conversion_path", "parse_error".
     parameter : str | None
         Which input caused the error (e.g., "from_unit", "to_unit", "unit_a").
     step : int | None
@@ -254,6 +254,8 @@ def resolve_unit(
     """
     try:
         return parse_unit(name), None
+    except NonScalableError as e:
+        return None, build_non_scalable_error(e, parameter=parameter, step=step)
     except UnknownUnitError:
         return None, build_unknown_unit_error(name, parameter=parameter, step=step)
     except ParseError as e:
@@ -314,6 +316,59 @@ def build_unknown_unit_error(
         parameter=parameter,
         step=step,
         likely_fix=likely_fix,
+        hints=hints,
+    )
+
+
+def build_non_scalable_error(
+    exc: NonScalableError,
+    parameter: str,
+    step: int | None = None,
+) -> ConversionError:
+    """Build a ConversionError for a non-scalable prefix decomposition.
+
+    Distinct from ``unknown_unit``: the base symbol *is* recognized, but it
+    has opted out of SI/binary prefix attachment (``Unit.scalable=False``).
+    The mechanical correction is to drop the prefix and use the base name
+    directly.
+
+    Parameters
+    ----------
+    exc : NonScalableError
+        The exception raised by the resolver. Carries ``.attempted`` (the
+        failing token), ``.base`` (the resolved base ``Unit``), and
+        ``.prefix`` (the parsed prefix descriptor).
+    parameter : str
+        Which parameter was bad (e.g., "from_unit", "to_unit").
+    step : int | None
+        For multi-step chains, the 0-indexed step where the error occurred.
+
+    Returns
+    -------
+    ConversionError
+        Structured error whose ``likely_fix`` is the base name.
+    """
+    base_name = exc.base.name
+    prefix_symbol = str(exc.prefix)
+
+    hints = [
+        f"{base_name!r} is marked scalable=False; SI/binary prefixes do "
+        f"not attach to it.",
+        f"Drop the {prefix_symbol!r} prefix and use {base_name!r} directly; "
+        f"express the magnitude numerically.",
+    ]
+
+    return ConversionError(
+        error=(
+            f"Unit {base_name!r} does not accept prefix decomposition; "
+            f"got {exc.attempted!r}."
+        ),
+        error_type="non_scalable_unit",
+        parameter=parameter,
+        step=step,
+        got=exc.attempted,
+        expected=base_name,
+        likely_fix=base_name,
         hints=hints,
     )
 
@@ -563,6 +618,7 @@ __all__ = [
     "ConversionError",
     "resolve_unit",
     "build_unknown_unit_error",
+    "build_non_scalable_error",
     "build_dimension_mismatch_error",
     "build_no_path_error",
     "build_parse_error",
