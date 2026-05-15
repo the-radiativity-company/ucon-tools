@@ -434,6 +434,8 @@ class ConversionResult(BaseModel):
     unit: str | None
     dimension: str
     uncertainty: float | None = None
+    source_scalable: bool | None = None
+    target_scalable: bool | None = None
 
 
 class UnitInfo(BaseModel):
@@ -477,6 +479,8 @@ class ComputeResult(BaseModel):
     unit: str
     dimension: str
     steps: list[ComputeStep]
+    source_scalable: bool | None = None
+    target_scalable: bool | None = None
 
 
 class SessionResult(BaseModel):
@@ -493,6 +497,7 @@ class UnitDefinitionResult(BaseModel):
     name: str
     dimension: str
     aliases: list[str]
+    scalable: bool
     message: str
 
 
@@ -544,6 +549,8 @@ class DecomposeResult(BaseModel):
     initial_unit: str
     target_unit: str
     factors: list[dict]
+    source_scalable: bool | None = None
+    target_scalable: bool | None = None
 
 
 class ConstantInfo(BaseModel):
@@ -617,6 +624,7 @@ def convert(
     to_unit: str,
     custom_units: list[dict] | None = None,
     custom_edges: list[dict] | None = None,
+    include_scalability: bool = False,
     ctx: Context | None = None,
 ) -> ConversionResult | ConversionError:
     """
@@ -640,6 +648,11 @@ def convert(
             Each dict should have: {"name": str, "dimension": str, "aliases": [str]}
         custom_edges: Optional list of inline conversion edges for this call only.
             Each dict should have: {"src": str, "dst": str, "factor": float}
+        include_scalability: When True, populate ``source_scalable`` and
+            ``target_scalable`` on the result, reflecting the leaf-unit
+            ``Unit.scalable`` flag. ``None`` for composite ``UnitProduct``
+            inputs (scalability is per-factor at that level). Defaults to
+            False to keep the steady-state response compact.
 
     Returns:
         ConversionResult with converted quantity, unit, and dimension.
@@ -697,6 +710,8 @@ def convert(
         unit=unit_str,
         dimension=dim_name,
         uncertainty=result.uncertainty,
+        source_scalable=_unit_scalable(src) if include_scalability else None,
+        target_scalable=_unit_scalable(dst) if include_scalability else None,
     )
 
 
@@ -732,14 +747,9 @@ def list_units(
         if dimension not in known_dims:
             return build_unknown_dimension_error(dimension, session=session)
 
-    # Units that accept SI scale prefixes
-    SCALABLE_UNITS = {
-        "meter", "gram", "second", "ampere", "kelvin", "mole", "candela",
-        "hertz", "newton", "pascal", "joule", "watt", "coulomb", "volt",
-        "farad", "ohm", "siemens", "weber", "tesla", "henry", "lumen",
-        "lux", "becquerel", "gray", "sievert", "katal",
-        "liter", "byte",
-    }
+    # Scalability is read directly from ``Unit.scalable`` (ucon ≥ 1.8.3).
+    # Catalog authors and session-unit declarers own this property; the MCP
+    # surface just reports it.
 
     result = []
     seen_names = set()
@@ -759,7 +769,7 @@ def list_units(
                     shorthand=obj.shorthand,
                     aliases=list(obj.aliases) if obj.aliases else [],
                     dimension=obj.dimension.name,
-                    scalable=obj.name in SCALABLE_UNITS,
+                    scalable=obj.scalable,
                 )
             )
 
@@ -782,7 +792,7 @@ def list_units(
                     shorthand=unit.shorthand or unit.name,
                     aliases=list(unit.aliases) if unit.aliases else [],
                     dimension=unit.dimension.name,
-                    scalable=False,  # Session units are not scalable by default
+                    scalable=unit.scalable,
                 )
             )
 
@@ -875,6 +885,7 @@ def compute(
     custom_units: list[dict] | None = None,
     custom_edges: list[dict] | None = None,
     expected_unit: str | None = None,
+    include_scalability: bool = False,
     ctx: Context | None = None,
 ) -> ComputeResult | ConversionError:
     """
@@ -910,6 +921,10 @@ def compute(
             will verify the result has the correct dimension and return diagnostic
             feedback if not. This enables convergence loops where a model can
             iterate on the factor chain until dimensions match.
+        include_scalability: When True, populate ``source_scalable`` (from
+            ``initial_unit``) and ``target_scalable`` (from the final unit
+            of the factor chain) on the result. ``None`` for composite
+            ``UnitProduct`` operands. Defaults to False.
 
     Returns:
         ComputeResult with final quantity, unit, dimension, and step-by-step trace.
@@ -1151,7 +1166,28 @@ def compute(
             unit=final_unit_str,
             dimension=final_dim,
             steps=steps,
+            source_scalable=(
+                _unit_scalable(initial_parsed) if include_scalability else None
+            ),
+            target_scalable=(
+                _unit_scalable(running_unit) if include_scalability else None
+            ),
         )
+
+
+def _unit_scalable(unit) -> bool | None:
+    """Scalability of a parsed unit token, for response metadata.
+
+    The ``scalable`` flag is a leaf-level property of a single ``Unit``;
+    it controls whether SI/binary prefix attachment is permitted on that
+    symbol. For a ``UnitProduct`` (e.g. ``m/s``), prefix attachment is
+    per-factor and the question is not meaningful at the top level —
+    ``None`` is returned so callers can distinguish "non-scalable leaf"
+    from "composite, ask per factor".
+    """
+    if isinstance(unit, Unit):
+        return unit.scalable
+    return None
 
 
 def _format_unit_output(unit) -> str:
@@ -1484,6 +1520,7 @@ def define_unit(
     name: str,
     dimension: str,
     aliases: list[str] | None = None,
+    scalable: bool = True,
     ctx: Context | None = None,
 ) -> UnitDefinitionResult | ConversionError:
     """
@@ -1501,6 +1538,11 @@ def define_unit(
         dimension: Dimension name (e.g., "mass", "length"). Use list_dimensions()
             to see available dimensions.
         aliases: Optional list of shorthand symbols (e.g., ["slug"] or ["nmi", "NM"]).
+        scalable: Whether SI scale prefixes (k, M, m, μ, …) may attach to this
+            unit. Defaults to True. Set to False for symbols where prefix
+            attachment is meaningless (e.g., currency codes like "USD"
+            should not parse "kUSD" as kilo+USD; users should write the
+            quantity numerically instead).
 
     Returns:
         UnitDefinitionResult confirming the unit was registered.
@@ -1508,6 +1550,8 @@ def define_unit(
 
     Example:
         define_unit(name="slug", dimension="mass", aliases=["slug"])
+        define_unit(name="us_dollar", dimension="currency",
+                    aliases=["USD"], scalable=False)
     """
     aliases = aliases or []
 
@@ -1555,13 +1599,19 @@ def define_unit(
         # Session-scoped dimension from an extended basis — bypass UnitDef
         # (which only knows built-in dimensions) and construct Unit directly.
         dim_obj = session_dims[dimension]
-        unit = Unit(name=name, dimension=dim_obj, aliases=tuple(aliases))
+        unit = Unit(
+            name=name,
+            dimension=dim_obj,
+            aliases=tuple(aliases),
+            scalable=scalable,
+        )
     else:
         try:
             unit_def = UnitDef(
                 name=name,
                 dimension=dimension,
                 aliases=tuple(aliases),
+                scalable=scalable,
             )
             unit = unit_def.materialize()
         except PackageLoadError as e:
@@ -1580,6 +1630,7 @@ def define_unit(
         name=name,
         dimension=dimension,
         aliases=aliases,
+        scalable=unit.scalable,
         message=f"Unit '{name}' registered for session. Use define_conversion() to add conversion edges.",
     )
 
@@ -1854,6 +1905,7 @@ def decompose(
     initial_unit: str | None = None,
     target_unit: str | None = None,
     known_quantities: list[dict] | None = None,
+    include_scalability: bool = False,
     ctx: Context | None = None,
 ) -> DecomposeResult | ConversionError:
     """
@@ -1947,6 +1999,11 @@ def decompose(
             ]
         )
         # Places 250 mL in numerator, 400 mg in denominator (to cancel mg → mL)
+
+        include_scalability: When True, populate ``source_scalable`` (the
+            parsed initial/source unit) and ``target_scalable`` (the parsed
+            target unit) on the result. ``None`` for composite ``UnitProduct``
+            operands. Defaults to False.
     """
     from ucon.parsing import parse
 
@@ -1956,11 +2013,12 @@ def decompose(
     # Determine mode based on parameters
     if query is not None:
         # Mode 1: Simple query string parsing
-        return _decompose_query_mode(query, graph)
+        return _decompose_query_mode(query, graph, include_scalability)
     elif initial_unit is not None and target_unit is not None:
         # Mode 2: Structured dimensional analysis
         return _decompose_structured_mode(
-            initial_unit, target_unit, known_quantities or [], graph
+            initial_unit, target_unit, known_quantities or [], graph,
+            include_scalability,
         )
     else:
         return ConversionError(
@@ -1977,6 +2035,7 @@ def decompose(
 def _decompose_query_mode(
     query: str,
     graph: ConversionGraph,
+    include_scalability: bool = False,
 ) -> DecomposeResult | ConversionError:
     """Handle simple 'X to Y' query parsing."""
     from ucon.parsing import parse
@@ -2124,6 +2183,12 @@ def _decompose_query_mode(
         initial_unit=initial_unit_str,
         target_unit=target_str,
         factors=factors,
+        source_scalable=(
+            _unit_scalable(source_unit) if include_scalability else None
+        ),
+        target_scalable=(
+            _unit_scalable(target_unit) if include_scalability else None
+        ),
     )
 
 
@@ -2132,6 +2197,7 @@ def _decompose_structured_mode(
     target_unit_str: str,
     known_quantities: list[dict],
     graph: ConversionGraph,
+    include_scalability: bool = False,
 ) -> DecomposeResult | ConversionError:
     """Handle structured dimensional analysis mode.
 
@@ -2294,6 +2360,12 @@ def _decompose_structured_mode(
         initial_unit=initial_unit_str,
         target_unit=target_unit_str,
         factors=factors,
+        source_scalable=(
+            _unit_scalable(initial_parsed) if include_scalability else None
+        ),
+        target_scalable=(
+            _unit_scalable(target_parsed) if include_scalability else None
+        ),
     )
 
 

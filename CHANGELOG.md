@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-05-15
+
+Surfaces ucon 1.8.3's first-class `Unit.scalable` property through the
+MCP tool surface. Prefix-on-non-scalable parses now produce a dedicated
+diagnostic instead of the generic `unknown_unit`, `define_unit` accepts
+the `scalable=` flag, and `convert` / `compute` / `decompose` gained
+opt-in scalability metadata.
+
+### Added
+
+- **`define_unit(..., scalable: bool = True)`** — the session-level
+  unit registration tool now exposes the `Unit.scalable` field added
+  in ucon 1.8.3. Callers can register opt-out leaf units (e.g. count
+  tokens, logarithmic units) at runtime; the resolver refuses prefix
+  attachment to them at parse time.
+- **`UnitDefinitionResult.scalable: bool`** (always-on). Every
+  successful `define_unit` echoes the resolved scalability, so callers
+  can read back the flag they set (or confirm the default).
+- **`source_scalable` / `target_scalable` on `ConversionResult`,
+  `ComputeResult`, `DecomposeResult`** (opt-in, default `None`).
+  Populated when the tool call sets `include_scalability=True`. Bare
+  `Unit` operands report the leaf's `scalable` value; composite
+  `UnitProduct` operands report `None` to signal "scalability is a
+  per-factor question at the leaf, not a single top-level answer."
+- **`include_scalability: bool = False`** parameter on `convert`,
+  `compute`, and `decompose`. Default-off keeps the steady-state
+  response compact for the common case where the caller doesn't need
+  this metadata.
+- **`non_scalable_unit` error classification.** When the ucon
+  resolver rejects a prefix decomposition because the base unit has
+  opted out of scalability (`Unit.scalable=False`), the MCP
+  `resolve_unit` choke point now produces a structured
+  `ConversionError(error_type="non_scalable_unit", ...)` instead of
+  the generic `unknown_unit` — the base symbol *is* recognized, only
+  the prefix attachment is at fault. The error carries:
+  - `got` — the attempted token (e.g. `"meach"`)
+  - `expected` / `likely_fix` — the base unit name (e.g. `"each"`)
+  - `hints` — two-line guidance explaining the `scalable=False` gate
+    and naming the prefix to drop
+  - `step` — preserved for multi-step `compute` factor chains so the
+    offending factor index is unambiguous
+- `ucon.tools.mcp.suggestions.build_non_scalable_error(exc, parameter,
+  step=None)` — exported builder consumed by `resolve_unit`.
+- `tests/ucon/tools/mcp/test_non_scalable_error.py` (16 tests) —
+  pins the contract at three layers: the `build_non_scalable_error`
+  builder shape, the `resolve_unit` classification (including
+  regression guards for `flarble` → `unknown_unit` and `km` /
+  bare `each` happy paths), and propagation through the public
+  `convert` and `compute` tools with `step`-index preservation.
+- `tests/ucon/tools/mcp/test_scalability_metadata.py` (11 tests) —
+  pins the always-on `UnitDefinitionResult.scalable` contract and the
+  opt-in gating semantics for `convert`, `compute`, and `decompose`
+  (both query and structured modes), including the `UnitProduct → None`
+  case for composite operands.
+
+### Changed
+
+- **Bumped minimum `ucon` to 1.8.3** (was 1.8.2). Picks up
+  `Unit.scalable`, `NonScalableError`, the resolver-level prefix gate,
+  TOML round-trip for the new field, and the computing-event family
+  in the catalog (`flop`, `op`, `instruction`, `cycle`, `request`,
+  `event`, all `scalable=True`).
+- **Removed the consumer-side `SCALABLE_UNITS` allowlist.** Scalability
+  is now read from `Unit.scalable` at the source — the MCP surface no
+  longer duplicates the policy.
+- **`resolve_unit` `except` ordering.** `NonScalableError` is caught
+  before `UnknownUnitError` (it's a subclass), so the more specific
+  diagnostic wins for prefix-on-non-scalable inputs without disturbing
+  the existing `unknown_unit` path.
+- **`ConversionError.error_type` documented value set.** Now
+  `"unknown_unit"`, `"non_scalable_unit"`, `"dimension_mismatch"`,
+  `"no_conversion_path"`, `"parse_error"`.
+
 ## [0.5.0] - 2026-05-14
 
 Ships the v1.8 `UnitSystem` substrate through the MCP tool surface and
@@ -489,6 +562,12 @@ through an explicit capability-resolution step before invocation.
 - Install via `pip install ucon-tools[mcp]`
 
 <!-- Links -->
+[0.5.1]: https://github.com/withtwoemms/ucon-tools/compare/0.5.0...0.5.1
+[0.5.0]: https://github.com/withtwoemms/ucon-tools/compare/0.4.8...0.5.0
+[0.4.8]: https://github.com/withtwoemms/ucon-tools/compare/0.4.7...0.4.8
+[0.4.7]: https://github.com/withtwoemms/ucon-tools/compare/0.4.6...0.4.7
+[0.4.6]: https://github.com/withtwoemms/ucon-tools/compare/0.4.5...0.4.6
+[0.4.5]: https://github.com/withtwoemms/ucon-tools/compare/0.4.4...0.4.5
 [0.4.4]: https://github.com/withtwoemms/ucon-tools/compare/0.4.3...0.4.4
 [0.4.3]: https://github.com/withtwoemms/ucon-tools/compare/0.4.2...0.4.3
 [0.4.2]: https://github.com/withtwoemms/ucon-tools/compare/0.4.1...0.4.2
