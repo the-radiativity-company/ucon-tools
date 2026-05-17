@@ -40,6 +40,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   case-insensitivity preserved);
   `test_declared_kind_mention_silences_cross_warnings` (early-exit
   path).
+- **Response capability hints across the `define_*` surface.** Three
+  `define_*` tools now append a one-sentence capability hint to their
+  success `message`, matching the convention already shipping on
+  `define_unit` and `extend_basis`. The hint names the primary
+  follow-on tool the caller should reach for next, shortening the
+  discovery loop from "register, list, guess, retry" to "register,
+  immediately call X":
+  - `define_constant` → `"Use list_constants() to retrieve its
+    metadata or compute() to apply its value in factor chains."`
+  - `define_conversion` → `"Use convert() to apply this edge directly
+    or as part of a multi-hop traversal."`
+  - `define_quantity_kind` → `"Use declare_computation() to gate a
+    calculation by this kind, then validate_result() to check the
+    output."`
+- **Regression pins** for every hint, including the two
+  pre-existing reference patterns:
+  - `test_server.py::TestSessionTools::test_define_unit_message_contains_capability_hint`
+  - `test_server.py::TestAffineConversion::test_define_conversion_message_contains_capability_hint`
+  - `test_constants.py::TestDefineConstant::test_define_message_contains_capability_hint`
+  - `test_koq.py::TestDefineQuantityKind::test_define_message_contains_capability_hint`
+  - `test_koq.py::TestExtendBasis::test_extend_basis_message_contains_capability_hint`
 
 ## [0.5.2] - 2026-05-15
 
