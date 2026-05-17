@@ -62,6 +62,20 @@ class TestDefineQuantityKind(unittest.TestCase):
         self.assertEqual(result.vector_signature, "M·L²·T⁻²·N⁻¹")
         self.assertEqual(result.category, "thermodynamic")
 
+    def test_define_message_contains_capability_hint(self):
+        """Regression: define_quantity_kind message points caller at declare_computation/validate_result.
+
+        See docs/internal/CONVENTION_response-capability-hints.md.
+        """
+        result = self.define_quantity_kind(
+            name="hint_kind",
+            dimension="energy",
+            description="Test kind",
+        )
+        self.assertIsInstance(result, self.QuantityKindDefinitionResult)
+        self.assertIn("declare_computation()", result.message)
+        self.assertIn("validate_result()", result.message)
+
     def test_define_kind_with_vector_notation(self):
         """Test defining a kind using vector notation for dimension."""
         result = self.define_quantity_kind(
@@ -678,6 +692,21 @@ class TestExtendBasis(unittest.TestCase):
         self.assertEqual(result.name, "thermodynamic_basis")
         self.assertEqual(result.base, "SI")
         self.assertIn("Φ (thermal)", result.components)
+
+    def test_extend_basis_message_contains_capability_hint(self):
+        """Regression: extend_basis message enumerates new dimensions for use.
+
+        See docs/internal/CONVENTION_response-capability-hints.md.
+        """
+        result = self.extend_basis(
+            name="hint_basis",
+            base="SI",
+            additional_components=[
+                {"name": "thermal", "symbol": "Φ", "description": "Thermal marker"},
+            ],
+        )
+        self.assertIsInstance(result, self.ExtendedBasisResult)
+        self.assertIn("New dimensions available:", result.message)
 
     def test_extend_with_multiple_components(self):
         """Test extending with multiple additional components."""

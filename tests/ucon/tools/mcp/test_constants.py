@@ -105,6 +105,23 @@ class TestDefineConstant:
         assert result.success
         assert result.symbol == "test_vs"
 
+    def test_define_message_contains_capability_hint(self):
+        """Regression: define_constant message points caller at list_constants/compute.
+
+        See docs/internal/CONVENTION_response-capability-hints.md.
+        """
+        from ucon.tools.mcp.server import define_constant, reset_session, ConstantDefinitionResult
+        reset_session()
+        result = define_constant(
+            symbol="test_hint",
+            name="speed of sound",
+            value=343,
+            unit="m/s",
+        )
+        assert isinstance(result, ConstantDefinitionResult)
+        assert "list_constants()" in result.message
+        assert "compute()" in result.message
+
     def test_duplicate_builtin_symbol_fails(self):
         from ucon.tools.mcp.server import define_constant, ConstantError
         result = define_constant(
