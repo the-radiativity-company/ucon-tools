@@ -361,6 +361,116 @@ class TestValidateResult(unittest.TestCase):
         self.assertGreater(len(result.semantic_warnings), 0)
         self.assertEqual(result.confidence, "medium")
 
+    # -- Regex word-boundary regression pins ---------------------------------
+    #
+    # Prior to the koq.py regex rewrite, `check_semantic_conflicts` used
+    # plain substring matching, so two-letter symbol keywords like 'Ea'
+    # (activation_energy) fired inside any English word containing the
+    # letter pair "ea": headline, Read, each, treat, team, feature, etc.
+    # The rewrite uses lookaround-anchored regex; these pins guard the
+    # false-positive class while confirming the true-positive class is
+    # preserved.
+
+    def test_headline_does_not_trip_Ea(self):
+        """'headline' must not match the 'Ea' activation_energy keyword."""
+        self._define_thermodynamic_kinds()
+        result = self.validate_result(
+            value=-228.6,
+            unit="kJ/mol",
+            declared_kind="gibbs_energy",
+            reasoning="This is a headline economic calculation.",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertEqual(result.semantic_warnings, [])
+
+    def test_Read_does_not_trip_Ea(self):
+        """'Read' must not match the 'Ea' activation_energy keyword."""
+        self._define_thermodynamic_kinds()
+        result = self.validate_result(
+            value=-228.6,
+            unit="kJ/mol",
+            declared_kind="gibbs_energy",
+            reasoning="Read the spec carefully before proceeding.",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertEqual(result.semantic_warnings, [])
+
+    def test_each_does_not_trip_Ea(self):
+        """'each' must not match the 'Ea' activation_energy keyword."""
+        self._define_thermodynamic_kinds()
+        result = self.validate_result(
+            value=-228.6,
+            unit="kJ/mol",
+            declared_kind="gibbs_energy",
+            reasoning="We treat each sample identically.",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertEqual(result.semantic_warnings, [])
+
+    def test_Ea_standalone_still_warns(self):
+        """'Ea' as a standalone token must still produce a warning.
+
+        The word 'Arrhenius' also appears in the reasoning; either keyword
+        is a legitimate hit for activation_energy. Assert on the kind name
+        rather than a specific keyword to remain robust to dict iteration
+        order.
+        """
+        self._define_thermodynamic_kinds()
+        result = self.validate_result(
+            value=-228.6,
+            unit="kJ/mol",
+            declared_kind="gibbs_energy",
+            reasoning="Computed the Ea from an Arrhenius plot.",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertTrue(
+            any("activation_energy" in w for w in result.semantic_warnings),
+            f"Expected activation_energy warning, got {result.semantic_warnings}",
+        )
+
+    def test_enthalpy_word_still_warns(self):
+        """'enthalpy' as a full word must still produce a warning."""
+        self._define_thermodynamic_kinds()
+        result = self.validate_result(
+            value=-228.6,
+            unit="kJ/mol",
+            declared_kind="gibbs_energy",
+            reasoning="Used the enthalpy change as input.",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertTrue(
+            any("enthalpy" in w.lower() for w in result.semantic_warnings),
+            f"Expected enthalpy warning, got {result.semantic_warnings}",
+        )
+
+    def test_ENTHALPY_caps_case_flex_preserved(self):
+        """Case-insensitive matching of full-word keywords still works."""
+        self._define_thermodynamic_kinds()
+        result = self.validate_result(
+            value=-228.6,
+            unit="kJ/mol",
+            declared_kind="gibbs_energy",
+            reasoning="ENTHALPY value applied directly.",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertTrue(
+            any("enthalpy" in w.lower() for w in result.semantic_warnings),
+            f"Expected enthalpy warning, got {result.semantic_warnings}",
+        )
+
+    def test_declared_kind_mention_silences_cross_warnings(self):
+        """When the declared kind appears in reasoning, related-quantity
+        mentions are suppressed (formula context, not confusion)."""
+        self._define_thermodynamic_kinds()
+        result = self.validate_result(
+            value=-285.8,
+            unit="kJ/mol",
+            declared_kind="enthalpy",
+            reasoning="Standard enthalpy of formation; ΔH ≈ ΔG at this T.",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertEqual(result.semantic_warnings, [])
+
     def test_validate_clears_active_declaration(self):
         """Test that validation clears the active declaration."""
         self._define_thermodynamic_kinds()
