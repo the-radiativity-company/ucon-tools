@@ -1510,7 +1510,11 @@ def define_constant(
         name=name,
         unit=unit,
         uncertainty=uncertainty,
-        message=f"Constant '{symbol}' registered for session.",
+        message=(
+            f"Constant '{symbol}' registered for session. "
+            f"Use list_constants() to retrieve its metadata or "
+            f"compute() to apply its value in factor chains."
+        ),
     )
 
 
@@ -1690,7 +1694,10 @@ def define_conversion(
         dst=dst,
         factor=factor,
         offset=offset,
-        message=f"Conversion edge '{src}' → '{dst}' (factor={factor}, offset={offset}) added to session.",
+        message=(
+            f"Conversion edge '{src}' → '{dst}' (factor={factor}, offset={offset}) added to session. "
+            f"Use convert() to apply this edge directly or as part of a multi-hop traversal."
+        ),
     )
 
 
@@ -3330,7 +3337,11 @@ def define_quantity_kind(
         dimension=dimension,
         vector_signature=vector_signature,
         category=category,
-        message=f"Quantity kind '{name}' registered for session.",
+        message=(
+            f"Quantity kind '{name}' registered for session. "
+            f"Use declare_computation() to gate a calculation by this kind, then "
+            f"validate_result() to check the output."
+        ),
     )
 
 

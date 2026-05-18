@@ -1181,6 +1181,19 @@ class TestSessionTools(unittest.TestCase):
         self.assertIsInstance(result, self.ConversionError)
         self.assertEqual(result.parameter, "dimension")
 
+    def test_define_unit_message_contains_capability_hint(self):
+        """Regression: define_unit message points caller at define_conversion().
+
+        See docs/internal/CONVENTION_response-capability-hints.md.
+        """
+        result = self.define_unit(
+            name="smoot",
+            dimension="length",
+            aliases=["smoot"],
+        )
+        self.assertIsInstance(result, self.UnitDefinitionResult)
+        self.assertIn("define_conversion()", result.message)
+
     def test_define_conversion_success(self):
         """Test defining a conversion edge successfully."""
         # First define the unit
@@ -1866,6 +1879,16 @@ class TestAffineConversion(unittest.TestCase):
         result = self.convert(1, "smoot", "m")
         self.assertNotIsInstance(result, self.ConversionError)
         self.assertAlmostEqual(result.quantity, 1.7018, places=3)
+
+    def test_define_conversion_message_contains_capability_hint(self):
+        """Regression: define_conversion message points caller at convert().
+
+        See docs/internal/CONVENTION_response-capability-hints.md.
+        """
+        self.define_unit(name="smoot", dimension="length", aliases=["smoot"])
+        result = self.define_conversion(src="smoot", dst="m", factor=1.7018)
+        self.assertIsInstance(result, self.ConversionDefinitionResult)
+        self.assertIn("convert()", result.message)
 
 
 # -----------------------------------------------------------------------------

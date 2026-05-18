@@ -15,6 +15,7 @@ following the same pattern as custom unit creation.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -257,6 +258,27 @@ SEMANTIC_KEYWORDS: dict[str, set[str]] = {
 }
 
 
+# Word-boundary patterns derived from SEMANTIC_KEYWORDS.
+# Lookarounds reject letter-adjacent matches (so "Ea" no longer fires on
+# "headline", "Read", "each"), while still allowing punctuation,
+# whitespace, digits, and unicode glyphs (Δ, μ, τ, =) to neighbour.
+_SEMANTIC_PATTERNS: dict[str, list[tuple[str, "re.Pattern[str]"]]] = {
+    kind: [
+        (kw, re.compile(rf"(?<![A-Za-z]){re.escape(kw)}(?![A-Za-z])", re.IGNORECASE))
+        for kw in keywords
+    ]
+    for kind, keywords in SEMANTIC_KEYWORDS.items()
+}
+
+
+def _mentions_kind(reasoning: str, kind: str) -> tuple[bool, str | None]:
+    """Return (matched, keyword) for the first word-boundary hit."""
+    for keyword, pattern in _SEMANTIC_PATTERNS.get(kind, ()):
+        if pattern.search(reasoning):
+            return True, keyword
+    return False, None
+
+
 def check_semantic_conflicts(
     declared_kind: str,
     reasoning: str,
@@ -284,30 +306,20 @@ def check_semantic_conflicts(
     if not reasoning:
         return []
 
-    reasoning_lower = reasoning.lower()
-
-    # Check if the declared kind's keywords are present
-    declared_keywords = SEMANTIC_KEYWORDS.get(declared_kind, set())
-    declared_kind_mentioned = any(
-        keyword.lower() in reasoning_lower for keyword in declared_keywords
-    )
-
-    # If the declared kind is explicitly mentioned, be lenient about related terms
-    # (user is likely describing a formula involving multiple quantities)
-    if declared_kind_mentioned:
+    # Early exit: if the declared kind is explicitly mentioned with a
+    # word-boundary match, related-quantity mentions are likely formula
+    # context rather than confusion.
+    if _mentions_kind(reasoning, declared_kind)[0]:
         return []
 
-    warnings = []
-    for kind_name, keywords in SEMANTIC_KEYWORDS.items():
+    warnings: list[str] = []
+    for kind_name in SEMANTIC_KEYWORDS:
         if kind_name == declared_kind:
             continue
-
-        for keyword in keywords:
-            if keyword.lower() in reasoning_lower:
-                warnings.append(
-                    f"Reasoning mentions '{keyword}' which is associated with "
-                    f"'{kind_name}', but declared kind is '{declared_kind}'"
-                )
-                break  # One warning per conflicting kind
-
+        matched, keyword = _mentions_kind(reasoning, kind_name)
+        if matched:
+            warnings.append(
+                f"Reasoning mentions '{keyword}' which is associated with "
+                f"'{kind_name}', but declared kind is '{declared_kind}'"
+            )
     return warnings

@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-05-17
+
+### Fixed
+
+- **`validate_result` semantic warnings no longer false-positive on
+  ordinary prose.** `check_semantic_conflicts` previously used plain
+  substring containment against the `SEMANTIC_KEYWORDS` table, which
+  caused two-character symbol keywords like `Ea` (activation_energy)
+  to match inside any English word containing the letter pair "ea" —
+  `headline`, `Read`, `each`, `treat`, `team`, `feature`. Any
+  `reasoning` string passed to `validate_result` could trip a spurious
+  "Reasoning mentions 'Ea'…" warning regardless of actual chemistry
+  content. The matcher now uses lookaround-anchored regex
+  (`(?<![A-Za-z]) … (?![A-Za-z])`, case-insensitive, pre-compiled at
+  module load) so letter-mid-word hits are rejected while legitimate
+  neighbours — punctuation, whitespace, digits, and unicode glyphs
+  (`Δ`, `μ`, `τ`, `=`) — still anchor a match. The early-exit path
+  ("declared kind is mentioned, suppress cross-warnings") uses the
+  same word-boundary rule, so formula-context reasoning like
+  `"Standard enthalpy of formation; ΔH ≈ ΔG at this T"` continues to
+  silence cross-warnings under a declared `enthalpy` kind.
+
+### Added
+
+- `tests/ucon/tools/mcp/test_koq.py::TestValidateResult` — seven
+  regression pins for the regex word-boundary contract:
+  `test_headline_does_not_trip_Ea`, `test_Read_does_not_trip_Ea`,
+  `test_each_does_not_trip_Ea` (false-positive class);
+  `test_Ea_standalone_still_warns`, `test_enthalpy_word_still_warns`,
+  `test_ENTHALPY_caps_case_flex_preserved` (true-positive +
+  case-insensitivity preserved);
+  `test_declared_kind_mention_silences_cross_warnings` (early-exit
+  path).
+- **Response capability hints across the `define_*` surface.** Three
+  `define_*` tools now append a one-sentence capability hint to their
+  success `message`, matching the convention already shipping on
+  `define_unit` and `extend_basis`. The hint names the primary
+  follow-on tool the caller should reach for next, shortening the
+  discovery loop from "register, list, guess, retry" to "register,
+  immediately call X":
+  - `define_constant` → `"Use list_constants() to retrieve its
+    metadata or compute() to apply its value in factor chains."`
+  - `define_conversion` → `"Use convert() to apply this edge directly
+    or as part of a multi-hop traversal."`
+  - `define_quantity_kind` → `"Use declare_computation() to gate a
+    calculation by this kind, then validate_result() to check the
+    output."`
+- **Regression pins** for every hint, including the two
+  pre-existing reference patterns:
+  - `test_server.py::TestSessionTools::test_define_unit_message_contains_capability_hint`
+  - `test_server.py::TestAffineConversion::test_define_conversion_message_contains_capability_hint`
+  - `test_constants.py::TestDefineConstant::test_define_message_contains_capability_hint`
+  - `test_koq.py::TestDefineQuantityKind::test_define_message_contains_capability_hint`
+  - `test_koq.py::TestExtendBasis::test_extend_basis_message_contains_capability_hint`
+
 ## [0.5.2] - 2026-05-15
 
 ### Changed
@@ -585,6 +640,8 @@ through an explicit capability-resolution step before invocation.
 - Install via `pip install ucon-tools[mcp]`
 
 <!-- Links -->
+[0.5.3]: https://github.com/withtwoemms/ucon-tools/compare/0.5.2...0.5.3
+[0.5.2]: https://github.com/withtwoemms/ucon-tools/compare/0.5.1...0.5.2
 [0.5.1]: https://github.com/withtwoemms/ucon-tools/compare/0.5.0...0.5.1
 [0.5.0]: https://github.com/withtwoemms/ucon-tools/compare/0.4.8...0.5.0
 [0.4.8]: https://github.com/withtwoemms/ucon-tools/compare/0.4.7...0.4.8
