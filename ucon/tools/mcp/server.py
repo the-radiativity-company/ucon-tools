@@ -3444,6 +3444,8 @@ def define_quantity_kind(
     aliases: list[str] | None = None,
     category: str = "session",
     disambiguation_hints: list[str] | None = None,
+    parent: str | None = None,
+    join_policy: str = "lca",
     ctx: Context | None = None,
 ) -> QuantityKindDefinitionResult | KOQError:
     """
@@ -3462,6 +3464,12 @@ def define_quantity_kind(
         aliases: Alternative names for the kind.
         category: Classification (defaults to "session").
         disambiguation_hints: Tips for distinguishing from similar kinds.
+        parent: Optional parent kind name. The parent must already exist in the
+            lattice (built-in or previously defined). The child inherits its
+            dimension and sits below the parent in the kind hierarchy.
+        join_policy: Policy when joining distinct descendants at this kind.
+            "lca" (default) lifts to the lowest common ancestor.
+            "refuse" blocks the join — use a named formula instead.
 
     Returns:
         QuantityKindDefinitionResult on success.
@@ -3479,6 +3487,16 @@ def define_quantity_kind(
     session = _get_session(ctx)
     aliases = aliases or []
     disambiguation_hints = disambiguation_hints or []
+
+    # Validate join_policy
+    valid_policies = {"lca", "refuse"}
+    if join_policy not in valid_policies:
+        return KOQError(
+            error=f"Invalid join_policy: '{join_policy}'",
+            error_type="invalid_join_policy",
+            parameter="join_policy",
+            hints=[f"Must be one of: {', '.join(sorted(valid_policies))}"],
+        )
 
     # Check for duplicate in session kinds (QuantityKindInfo registry)
     session_kinds = session.get_quantity_kinds()
@@ -3503,6 +3521,23 @@ def define_quantity_kind(
     except Exception:
         pass  # KindNotFound — name is not a built-in
 
+    # Resolve parent kind if provided
+    from ucon.kinds import Kind, KindNotFound, NameCollision, JoinPolicy
+    parent_kind = None
+    if parent is not None:
+        try:
+            parent_kind = lattice.get(parent)
+        except KindNotFound:
+            return KOQError(
+                error=f"Unknown parent kind: '{parent}'",
+                error_type="unknown_parent",
+                parameter="parent",
+                hints=[
+                    "The parent must already exist in the lattice.",
+                    "Use list_quantity_kinds() to see available kinds.",
+                ],
+            )
+
     # Parse dimension to vector notation (session-aware so extended-basis
     # dimensions are accepted).
     vector_signature = _parse_dimension_to_vector(dimension, session=session)
@@ -3518,6 +3553,8 @@ def define_quantity_kind(
             ],
         )
 
+    resolved_join_policy = JoinPolicy(join_policy)
+
     # Create and register the QuantityKindInfo (MCP wire format).
     kind_info = QuantityKindInfo(
         name=name,
@@ -3527,6 +3564,8 @@ def define_quantity_kind(
         aliases=tuple(aliases),
         category=category,
         disambiguation_hints=tuple(disambiguation_hints),
+        parent=parent,
+        join_policy=join_policy,
     )
     session.register_quantity_kind(kind_info)
 
@@ -3536,11 +3575,12 @@ def define_quantity_kind(
     if not builtin_kind_exists:
         dim_obj = _parse_dimension_object(dimension, session=session)
         if dim_obj is not None:
-            from ucon.kinds import Kind, NameCollision
             lattice_kind = Kind(
                 name=name,
                 dimension=dim_obj,
                 aliases=tuple(aliases),
+                parent=parent_kind,
+                join_policy=resolved_join_policy,
             )
             try:
                 lattice.register(lattice_kind)
@@ -3553,6 +3593,8 @@ def define_quantity_kind(
         dimension=dimension,
         vector_signature=vector_signature,
         category=category,
+        parent=parent,
+        join_policy=join_policy,
         message=(
             f"Quantity kind '{name}' registered for session. "
             f"Use declare_computation() to gate a calculation by this kind, then "

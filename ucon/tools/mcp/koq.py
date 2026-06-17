@@ -63,6 +63,8 @@ class QuantityKindInfo:
     aliases: tuple[str, ...] = ()
     category: str = "general"
     disambiguation_hints: tuple[str, ...] = ()
+    parent: str | None = None
+    join_policy: str = "lca"
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,8 @@ class QuantityKindDefinitionResult(BaseModel):
     dimension: str
     vector_signature: str
     category: str
+    parent: str | None = None
+    join_policy: str = "lca"
     message: str
 
 

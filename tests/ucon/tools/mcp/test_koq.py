@@ -147,6 +147,98 @@ class TestDefineQuantityKind(unittest.TestCase):
         self.assertIsInstance(result, self.KOQError)
         self.assertEqual(result.error_type, "duplicate_kind")
 
+    def test_define_with_parent_success(self):
+        """Test defining a kind with a parent kind."""
+        # Define a parent first
+        parent_result = self.define_quantity_kind(
+            name="my_specific_energy",
+            dimension="energy/mass",
+            description="Energy per unit mass",
+        )
+        self.assertIsInstance(parent_result, self.QuantityKindDefinitionResult)
+
+        # Define a child under the parent
+        child_result = self.define_quantity_kind(
+            name="my_absorbed_dose",
+            dimension="energy/mass",
+            description="Energy absorbed per unit mass",
+            parent="my_specific_energy",
+        )
+        self.assertIsInstance(child_result, self.QuantityKindDefinitionResult)
+        self.assertTrue(child_result.success)
+        self.assertEqual(child_result.parent, "my_specific_energy")
+        self.assertEqual(child_result.join_policy, "lca")
+
+    def test_define_with_unknown_parent_rejected(self):
+        """Test that defining a kind with a nonexistent parent fails."""
+        result = self.define_quantity_kind(
+            name="orphan_kind",
+            dimension="energy",
+            description="Kind with missing parent",
+            parent="nonexistent_parent",
+        )
+        self.assertIsInstance(result, self.KOQError)
+        self.assertEqual(result.error_type, "unknown_parent")
+
+    def test_define_with_join_policy_refuse(self):
+        """Test defining a kind with REFUSE join policy."""
+        result = self.define_quantity_kind(
+            name="my_refuse_parent",
+            dimension="energy/mass",
+            description="Parent with REFUSE policy",
+            join_policy="refuse",
+        )
+        self.assertIsInstance(result, self.QuantityKindDefinitionResult)
+        self.assertTrue(result.success)
+        self.assertEqual(result.join_policy, "refuse")
+
+    def test_define_with_invalid_join_policy(self):
+        """Test that invalid join_policy values are rejected."""
+        result = self.define_quantity_kind(
+            name="bad_policy_kind",
+            dimension="energy",
+            description="Kind with invalid policy",
+            join_policy="invalid",
+        )
+        self.assertIsInstance(result, self.KOQError)
+        self.assertEqual(result.error_type, "invalid_join_policy")
+
+    def test_lattice_join_after_hierarchy(self):
+        """Test that lattice join works correctly after defining hierarchy."""
+        from ucon.tools.mcp.server import _get_session, _reset_fallback_session
+        from ucon.kinds import JoinRefused
+
+        # Define parent with REFUSE policy
+        self.define_quantity_kind(
+            name="my_se",
+            dimension="energy/mass",
+            description="Specific energy parent",
+            join_policy="refuse",
+        )
+        # Define two children
+        self.define_quantity_kind(
+            name="my_ad",
+            dimension="energy/mass",
+            description="Absorbed dose",
+            parent="my_se",
+        )
+        self.define_quantity_kind(
+            name="my_de",
+            dimension="energy/mass",
+            description="Dose equivalent",
+            parent="my_se",
+        )
+
+        # Access the lattice and test join behavior
+        session = _get_session(None)
+        lattice = session.get_kind_lattice()
+        ad = lattice.get("my_ad")
+        de = lattice.get("my_de")
+
+        # Joining siblings under a REFUSE parent should raise JoinRefused
+        with self.assertRaises(JoinRefused):
+            lattice.join(ad, de)
+
 
 class TestDeclareComputation(unittest.TestCase):
     """Test the declare_computation tool."""
