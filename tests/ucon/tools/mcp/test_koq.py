@@ -580,11 +580,53 @@ class TestListQuantityKinds(unittest.TestCase):
         if not self.skip_tests:
             self._reset_fallback_session()
 
-    def test_list_empty_session(self):
-        """Test listing kinds when no kinds are defined."""
-        result = self.list_quantity_kinds()
+    def test_list_session_only_empty(self):
+        """Test listing session-only kinds when none are defined."""
+        result = self.list_quantity_kinds(include_builtin=False)
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 0)
+
+    def test_list_includes_builtin_kinds(self):
+        """Test that list includes built-in kinds from the KindLattice."""
+        result = self.list_quantity_kinds()
+        self.assertIsInstance(result, list)
+        # comprehensive.ucon.toml ships ~26 built-in kinds
+        self.assertGreaterEqual(len(result), 20)
+        # Verify structure of built-in entries
+        names = [k["name"] for k in result]
+        self.assertIn("energy", names)
+        # Check fields present on built-in entries
+        builtin = next(k for k in result if k["source"] == "builtin")
+        self.assertIn("parent", builtin)
+        self.assertIn("join_policy", builtin)
+        self.assertIn("dimension_vector", builtin)
+
+    def test_list_builtin_dimension_filter(self):
+        """Test filtering built-in kinds by dimension."""
+        # Get energy dimension vector first
+        all_kinds = self.list_quantity_kinds()
+        energy_kind = next(k for k in all_kinds if k["name"] == "energy")
+        energy_vec = energy_kind["dimension_vector"]
+
+        result = self.list_quantity_kinds(dimension="energy")
+        self.assertIsInstance(result, list)
+        self.assertGreaterEqual(len(result), 1)
+        for k in result:
+            self.assertEqual(k["dimension_vector"], energy_vec)
+
+    def test_list_session_overrides_builtin(self):
+        """Test that session kinds override built-in kinds by name."""
+        # Define a session kind with the same name as a built-in
+        self.define_quantity_kind(
+            name="energy",
+            dimension="energy",
+            description="Session override",
+            category="custom",
+        )
+        result = self.list_quantity_kinds()
+        energy_entries = [k for k in result if k["name"] == "energy"]
+        self.assertEqual(len(energy_entries), 1)
+        self.assertEqual(energy_entries[0]["source"], "session")
 
     def test_list_session_kinds(self):
         """Test that list includes session-defined kinds."""
@@ -598,10 +640,12 @@ class TestListQuantityKinds(unittest.TestCase):
 
         result = self.list_quantity_kinds()
         self.assertIsInstance(result, list)
-        self.assertEqual(len(result), 1)
+        # Should include both builtins + the session kind
+        custom_kinds = [k for k in result if k["name"] == "my_custom_kind"]
+        self.assertEqual(len(custom_kinds), 1)
 
-        kind = result[0]
-        self.assertEqual(kind["name"], "my_custom_kind")
+        kind = custom_kinds[0]
+        self.assertEqual(kind["source"], "session")
         self.assertIn("dimension_vector", kind)
         self.assertIn("description", kind)
         self.assertIn("category", kind)
@@ -610,57 +654,61 @@ class TestListQuantityKinds(unittest.TestCase):
         """Test filtering by dimension."""
         # Define kinds with different dimensions
         self.define_quantity_kind(
-            name="enthalpy",
+            name="my_enthalpy",
             dimension="energy/amount_of_substance",
             description="Enthalpy",
         )
         self.define_quantity_kind(
-            name="work",
+            name="my_work",
             dimension="energy",
             description="Work",
         )
 
-        result = self.list_quantity_kinds(dimension="energy/amount_of_substance")
+        result = self.list_quantity_kinds(
+            dimension="energy/amount_of_substance",
+            include_builtin=False,
+        )
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["name"], "enthalpy")
+        self.assertEqual(result[0]["name"], "my_enthalpy")
 
     def test_filter_by_category(self):
         """Test filtering by category."""
         self.define_quantity_kind(
-            name="enthalpy",
+            name="my_enthalpy",
             dimension="energy/amount_of_substance",
             description="Enthalpy",
             category="thermodynamic",
         )
         self.define_quantity_kind(
-            name="work",
+            name="my_work",
             dimension="energy",
             description="Work",
             category="mechanical",
         )
 
+        # Category filter skips built-in kinds (they have category "builtin")
         result = self.list_quantity_kinds(category="thermodynamic")
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["name"], "enthalpy")
+        self.assertEqual(result[0]["name"], "my_enthalpy")
 
     def test_filter_by_dimension_and_category(self):
         """Test filtering by both dimension and category."""
         self.define_quantity_kind(
-            name="enthalpy",
+            name="my_enthalpy",
             dimension="energy/amount_of_substance",
             description="Enthalpy",
             category="thermodynamic",
         )
         self.define_quantity_kind(
-            name="gibbs_energy",
+            name="my_gibbs_energy",
             dimension="energy/amount_of_substance",
             description="Gibbs energy",
             category="thermodynamic",
         )
         self.define_quantity_kind(
-            name="bond_energy",
+            name="my_bond_energy",
             dimension="energy/amount_of_substance",
             description="Bond energy",
             category="chemical",
@@ -673,9 +721,9 @@ class TestListQuantityKinds(unittest.TestCase):
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 2)
         names = [k["name"] for k in result]
-        self.assertIn("enthalpy", names)
-        self.assertIn("gibbs_energy", names)
-        self.assertNotIn("bond_energy", names)
+        self.assertIn("my_enthalpy", names)
+        self.assertIn("my_gibbs_energy", names)
+        self.assertNotIn("my_bond_energy", names)
 
 
 class TestExtendBasis(unittest.TestCase):
@@ -1000,8 +1048,8 @@ class TestKOQSessionReset(unittest.TestCase):
         # Reset session
         self.reset_session()
 
-        # Verify it's gone
-        kinds = self.list_quantity_kinds()
+        # Verify session kind is gone (built-in kinds remain)
+        kinds = self.list_quantity_kinds(include_builtin=False)
         self.assertEqual(len(kinds), 0)
 
     def test_reset_clears_active_computation(self):

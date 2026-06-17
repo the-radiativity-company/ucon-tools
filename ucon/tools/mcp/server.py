@@ -3798,6 +3798,7 @@ def validate_result(
 def list_quantity_kinds(
     dimension: str | None = None,
     category: str | None = None,
+    include_builtin: bool = True,
     ctx: Context | None = None,
 ) -> list[dict] | KOQError:
     """
@@ -3809,6 +3810,8 @@ def list_quantity_kinds(
         dimension: Optional filter by dimension (e.g., "energy/amount_of_substance"
             or vector notation "M·L²·T⁻²·N⁻¹").
         category: Optional filter by category (e.g., "thermodynamic", "mechanical").
+        include_builtin: Include built-in kinds from the KindLattice (default True).
+            Set to False to see only session-defined kinds.
 
     Returns:
         List of quantity kind information dicts.
@@ -3832,28 +3835,61 @@ def list_quantity_kinds(
         if dimension_vector is None:
             dimension_vector = dimension
 
-    # Collect session-defined kinds
-    all_kinds = list(session_kinds.values())
+    # Index session kinds by name for dedup against built-ins
+    seen: set[str] = set()
+    result: list[dict] = []
 
-    # Apply filters
-    result = []
-    for kind in all_kinds:
-        if dimension_vector and kind.dimension_vector != dimension_vector:
+    # Session-defined kinds take priority
+    for kind in session_kinds.values():
+        vec = kind.dimension_vector
+        if dimension_vector and vec != dimension_vector:
             continue
         if category and kind.category != category:
             continue
 
+        seen.add(kind.name)
         result.append({
             "name": kind.name,
             "dimension_name": kind.dimension_name,
-            "dimension_vector": kind.dimension_vector,
+            "dimension_vector": vec,
             "description": kind.description,
             "aliases": list(kind.aliases),
             "category": kind.category,
             "disambiguation_hints": list(kind.disambiguation_hints),
+            "parent": kind.parent if hasattr(kind, "parent") else None,
+            "join_policy": kind.join_policy if hasattr(kind, "join_policy") else "lca",
+            "source": "session",
         })
 
-    return sorted(result, key=lambda k: (k["category"], k["name"]))
+    # Built-in kinds from the KindLattice
+    if include_builtin:
+        lattice = session.get_kind_lattice()
+        for lattice_kind in lattice:
+            if lattice_kind.name in seen:
+                continue
+            vec = _render_dimension_to_vector(lattice_kind.dimension)
+            if dimension_vector and vec != dimension_vector:
+                continue
+            # Built-in kinds don't carry a category string; skip
+            # category filter for them (they wouldn't match anyway).
+            if category:
+                continue
+
+            seen.add(lattice_kind.name)
+            result.append({
+                "name": lattice_kind.name,
+                "dimension_name": lattice_kind.dimension.name,
+                "dimension_vector": vec,
+                "description": "",
+                "aliases": list(lattice_kind.aliases),
+                "category": "builtin",
+                "disambiguation_hints": [],
+                "parent": lattice_kind.parent.name if lattice_kind.parent else None,
+                "join_policy": lattice_kind.join_policy.value,
+                "source": "builtin",
+            })
+
+    return sorted(result, key=lambda k: (k["source"], k["name"]))
 
 
 @mcp.tool()
