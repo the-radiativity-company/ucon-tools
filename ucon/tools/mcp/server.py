@@ -533,6 +533,7 @@ class FormulaResult(BaseModel):
     quantity: float
     unit: str | None
     dimension: str
+    kind: str | None = None
     uncertainty: float | None = None
 
 
@@ -3173,11 +3174,13 @@ def call_formula(
         if result.unit is not None:
             unit_str = result.unit.shorthand
         dim = _number_dimension(result)
+        result_kind = result.kind.name if result.kind is not None else None
         return FormulaResult(
             formula=name,
             quantity=result.quantity,
             unit=unit_str,
             dimension=dim.name,
+            kind=result_kind,
             uncertainty=result.uncertainty,
         )
     else:

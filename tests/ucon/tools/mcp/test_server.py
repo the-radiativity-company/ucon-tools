@@ -2214,6 +2214,33 @@ class TestCallFormulaEdgeCases(unittest.TestCase):
         self.assertIsInstance(result, self.FormulaError)
         self.assertEqual(result.error_type, "invalid_parameter")
 
+    def test_formula_result_surfaces_kind(self):
+        """FormulaResult has a kind field that surfaces Number.kind."""
+        from ucon import parse_unit
+        from ucon.kinds import Kind
+
+        _FORMULA_REGISTRY.pop("kinded_identity", None)
+
+        dim = parse_unit("J").dimension
+        test_kind = Kind(name="test_energy_kind", dimension=dim)
+
+        @self.register_formula("kinded_identity", description="returns kinded Number")
+        def kinded_identity(x: Number) -> Number:
+            return Number(quantity=x.quantity, unit=x.unit, kind=test_kind)
+
+        result = self.call_formula("kinded_identity", {"x": {"value": 42, "unit": "J"}})
+        self.assertIsInstance(result, self.FormulaResult)
+        self.assertEqual(result.kind, "test_energy_kind")
+
+    def test_formula_result_kind_none_when_unkinded(self):
+        """FormulaResult.kind is None when the Number has no kind."""
+        result = self.call_formula("bmi", {
+            "mass": {"value": 70, "unit": "kg"},
+            "height": {"value": 1.75, "unit": "m"},
+        })
+        self.assertIsInstance(result, self.FormulaResult)
+        self.assertIsNone(result.kind)
+
 
 # -----------------------------------------------------------------------------
 # Pseudo-dimension isolation (suggestions.py)
