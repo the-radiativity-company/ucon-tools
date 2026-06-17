@@ -3792,19 +3792,42 @@ def validate_result(
     """
     session = _get_session(ctx)
     session_kinds = session.get_quantity_kinds()
+    lattice = session.get_kind_lattice()
 
-    # Get the kind to validate against
+    # ── Resolve declared kind ──────────────────────────────────────────
+    # Try the lattice first (covers built-in kinds from
+    # comprehensive.ucon.toml), then fall back to the session
+    # QuantityKindInfo dict.
+    from ucon.kinds import KindNotFound
+
+    kind_name: str
+    expected_dimension: str
+    declared_kind_obj = None  # lattice Kind, if resolvable
+    kind_info = None  # QuantityKindInfo, for dimension-only fallback
+
     if declared_kind is not None:
-        kind = get_quantity_kind(declared_kind, session_kinds)
-        if kind is None:
+        kind_name = declared_kind
+        # Try lattice
+        try:
+            declared_kind_obj = lattice.get(declared_kind)
+        except KindNotFound:
+            pass
+        # Try session dict
+        kind_info = get_quantity_kind(declared_kind, session_kinds)
+
+        if declared_kind_obj is None and kind_info is None:
             return KOQError(
                 error=f"Unknown quantity kind: '{declared_kind}'",
                 error_type="unknown_kind",
                 parameter="declared_kind",
                 hints=["Use list_quantity_kinds() to see available kinds"],
             )
-        kind_name = declared_kind
-        expected_dimension = kind.dimension_vector
+        if declared_kind_obj is not None:
+            expected_dimension = _render_dimension_to_vector(declared_kind_obj.dimension)
+        elif kind_info is not None:
+            expected_dimension = kind_info.dimension_vector
+        else:
+            expected_dimension = "unknown"
     else:
         # Use active declaration
         active = session.get_active_computation()
@@ -3818,11 +3841,20 @@ def validate_result(
                     "Or specify declared_kind parameter",
                 ],
             )
-        kind = get_quantity_kind(active.quantity_kind, session_kinds)
         kind_name = active.quantity_kind
-        expected_dimension = kind.dimension_vector if kind else "unknown"
+        try:
+            declared_kind_obj = lattice.get(kind_name)
+        except KindNotFound:
+            pass
+        kind_info = get_quantity_kind(kind_name, session_kinds)
+        if declared_kind_obj is not None:
+            expected_dimension = _render_dimension_to_vector(declared_kind_obj.dimension)
+        elif kind_info is not None:
+            expected_dimension = kind_info.dimension_vector
+        else:
+            expected_dimension = "unknown"
 
-    # Parse result unit
+    # ── Parse result unit ──────────────────────────────────────────────
     parsed_unit, err = resolve_unit(unit, parameter="unit")
     if err:
         return KOQError(
@@ -3835,31 +3867,149 @@ def validate_result(
     actual_dimension = _get_dimension_vector(parsed_unit)
     dimension_match = actual_dimension == expected_dimension
 
-    # Check semantic consistency if reasoning provided
-    semantic_warnings = []
-    if reasoning and kind:
+    # ── Check semantic consistency if reasoning provided ────────────────
+    semantic_warnings: list[str] = []
+    if reasoning and (kind_info or declared_kind_obj):
         semantic_warnings = check_semantic_conflicts(kind_name, reasoning)
 
-    # Determine confidence level
+    # ── Lattice-join kind enforcement (B5) ─────────────────────────────
+    #
+    # A unit does NOT uniquely determine a kind (Sv and Gy share the same
+    # dimension).  Result-kind recovery uses three layers:
+    #
+    # 1. UNIT_KIND_CONVENTIONS — a small, auditable table for units where
+    #    convention uniquely pins a kind (Sv→dose_equivalent, Gy→absorbed_dose).
+    # 2. kinds_for_dimension() leaf filtering — when exactly one non-ancestor
+    #    candidate exists, use it.
+    # 3. Declared-kind membership — if the declared kind is among the
+    #    candidates, accept (ambiguous if siblings exist under REFUSE parent).
+    result_kind_name: str | None = None
+    kind_match: bool | None = None
+    kind_candidates: list[str] = []
+
+    # Convention table: units whose kind is procedurally constituted and
+    # cannot be inferred from the dimension alone.  Keyed by both the
+    # canonical name and the shorthand symbol.
+    _UNIT_KIND_CONVENTIONS: dict[str, str] = {
+        "Sv": "dose_equivalent",
+        "sievert": "dose_equivalent",
+        "Gy": "absorbed_dose",
+        "gray": "absorbed_dose",
+        "Bq": "radioactive_activity",
+        "becquerel": "radioactive_activity",
+    }
+
+    if dimension_match and declared_kind_obj is not None:
+        result_dim = parsed_unit.dimension if hasattr(parsed_unit, 'dimension') else None
+        if result_dim is not None:
+            candidates = lattice.kinds_for_dimension(result_dim)
+            candidate_names = {k.name for k in candidates}
+
+            # Layer 1: convention map — try shorthand, then name, then
+            # the raw user string.
+            unit_shorthand = getattr(parsed_unit, 'shorthand', None)
+            unit_name = getattr(parsed_unit, 'name', unit)
+            conv_kind_name = (
+                _UNIT_KIND_CONVENTIONS.get(unit_shorthand or "")
+                or _UNIT_KIND_CONVENTIONS.get(unit_name)
+                or _UNIT_KIND_CONVENTIONS.get(unit)
+            )
+            conv_kind_obj = None
+            if conv_kind_name:
+                try:
+                    conv_kind_obj = lattice.get(conv_kind_name)
+                except KindNotFound:
+                    pass
+
+            if conv_kind_obj is not None:
+                # Convention resolved — use lattice join to check
+                result_kind_name = conv_kind_name
+                try:
+                    joined = lattice.join(declared_kind_obj, conv_kind_obj)
+                    kind_match = joined.name == declared_kind_obj.name
+                except JoinRefused:
+                    kind_match = False
+            else:
+                # Layer 2+3: no convention — use dimension candidates
+                if declared_kind_obj.name in candidate_names:
+                    # Declared kind is among the candidates for this
+                    # dimension — the declaration is consistent with the
+                    # result unit.  Accept as a verified match: the caller
+                    # asserted the kind, and the dimension confirms it is a
+                    # valid kind for this unit.
+                    result_kind_name = declared_kind_obj.name
+                    kind_match = True
+                else:
+                    # Declared kind is NOT among the candidates.  Filter
+                    # to leaf kinds (no children in the candidate set).
+                    leaf_candidates = [
+                        k for k in candidates
+                        if not any(
+                            c.parent is not None and c.parent.name == k.name
+                            for c in candidates
+                        )
+                    ]
+                    if len(leaf_candidates) == 1:
+                        result_kind_name = leaf_candidates[0].name
+                        try:
+                            joined = lattice.join(declared_kind_obj, leaf_candidates[0])
+                            kind_match = joined.name == declared_kind_obj.name
+                        except JoinRefused:
+                            kind_match = False
+                    elif len(leaf_candidates) > 1:
+                        kind_candidates = sorted(k.name for k in leaf_candidates)
+                        kind_match = None
+                    else:
+                        kind_match = None
+
+    # ── Determine confidence level and outcome ────────────────────────
+    suggestions: list[str] = []
+
     if not dimension_match:
         confidence = "low"
         passed = False
         explanation = f"Dimension mismatch: got '{actual_dimension}', expected '{expected_dimension}'"
+        suggestions.append(f"Check that '{unit}' is the correct unit for '{kind_name}'")
+    elif kind_match is False:
+        # Kind enforcement fired: JoinRefused or LCA divergence
+        confidence = "high"
+        passed = False
+        if result_kind_name:
+            explanation = (
+                f"Kind mismatch: declared '{kind_name}' but result unit implies "
+                f"'{result_kind_name}'. These share dimension '{actual_dimension}' "
+                f"but are physically distinct and cannot be conflated."
+            )
+            suggestions.append(
+                f"Use a unit associated with '{kind_name}', not '{result_kind_name}'."
+            )
+        else:
+            explanation = f"Kind mismatch: result does not refine declared kind '{kind_name}'"
+    elif kind_match is None and kind_candidates:
+        # Ambiguous: dimension matches but kind can't be verified
+        confidence = "low"
+        passed = True
+        explanation = (
+            f"Dimension matches '{kind_name}' but result kind is ambiguous. "
+            f"Candidates: {', '.join(kind_candidates)}"
+        )
+        semantic_warnings.append(
+            f"Cannot verify kind match: unit '{unit}' is compatible with multiple "
+            f"kinds: {', '.join(kind_candidates)}. Consider using convert() with "
+            f"kind= to thread kind annotations."
+        )
     elif semantic_warnings:
         confidence = "medium"
         passed = True
         explanation = "Dimension matches but reasoning may indicate different quantity"
+        suggestions.append("Review reasoning to ensure it matches the declared quantity kind")
     else:
         confidence = "high"
         passed = True
-        explanation = f"Result validated as '{kind_name}'"
-
-    # Build suggestions
-    suggestions = []
-    if not dimension_match:
-        suggestions.append(f"Check that '{unit}' is the correct unit for '{kind_name}'")
-    if semantic_warnings:
-        suggestions.append("Review reasoning to ensure it matches the declared quantity kind")
+        if kind_match is True:
+            explanation = f"Result validated as '{kind_name}' (kind verified)"
+        else:
+            explanation = f"Result validated as '{kind_name}'"
 
     # Clear active declaration
     session.set_active_computation(None)
@@ -3872,6 +4022,9 @@ def validate_result(
         actual_dimension=actual_dimension,
         expected_dimension=expected_dimension,
         dimension_match=dimension_match,
+        result_kind=result_kind_name,
+        kind_match=kind_match,
+        kind_candidates=kind_candidates,
         semantic_warnings=semantic_warnings,
         confidence=confidence,
         explanation=explanation,

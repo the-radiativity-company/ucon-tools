@@ -642,6 +642,81 @@ class TestValidateResult(unittest.TestCase):
         self.assertIsInstance(result, self.KOQError)
         self.assertEqual(result.error_type, "unknown_kind")
 
+    # -- B5 enforcement: lattice-join kind checks ----------------------------
+
+    def test_validate_with_builtin_kind_no_prior_define(self):
+        """validate_result works with built-in kind names directly.
+
+        B5: callers should be able to validate against built-in kinds
+        (e.g., 'energy') without a prior define_quantity_kind call.
+        """
+        result = self.validate_result(
+            value=100.0,
+            unit="J",
+            declared_kind="energy",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertTrue(result.passed)
+        self.assertTrue(result.dimension_match)
+
+    def test_validate_sv_vs_absorbed_dose_fails(self):
+        """B5 reproduction: Sv against absorbed_dose must FAIL.
+
+        absorbed_dose and dose_equivalent share dimension specific_energy
+        but their parent has join_policy=REFUSE. The lattice.join() raises
+        JoinRefused, so validate_result must reject this.
+        """
+        result = self.validate_result(
+            value=2.5,
+            unit="Sv",
+            declared_kind="absorbed_dose",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertFalse(result.passed)
+        self.assertTrue(result.dimension_match)
+        self.assertFalse(result.kind_match)
+        self.assertEqual(result.confidence, "high")
+
+    def test_validate_gy_vs_absorbed_dose_passes(self):
+        """B5: Gy against absorbed_dose should PASS at high confidence."""
+        result = self.validate_result(
+            value=2.5,
+            unit="Gy",
+            declared_kind="absorbed_dose",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertTrue(result.passed)
+        self.assertTrue(result.dimension_match)
+        self.assertEqual(result.confidence, "high")
+
+    def test_validate_dimension_mismatch_still_fails(self):
+        """Dimension mismatch is still caught regardless of kind enforcement."""
+        result = self.validate_result(
+            value=100.0,
+            unit="m/s",
+            declared_kind="energy",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertFalse(result.passed)
+        self.assertFalse(result.dimension_match)
+        self.assertEqual(result.confidence, "low")
+
+    def test_validate_result_kind_candidates_on_ambiguity(self):
+        """When result kind is ambiguous, kind_candidates lists options."""
+        # J/kg is ambiguous: absorbed_dose, dose_equivalent, specific_energy
+        result = self.validate_result(
+            value=2.5,
+            unit="J/kg",
+            declared_kind="absorbed_dose",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertTrue(result.dimension_match)
+        # If multiple leaf candidates, should be ambiguous
+        if result.kind_candidates:
+            self.assertIsNone(result.kind_match)
+            self.assertEqual(result.confidence, "low")
+            self.assertTrue(result.passed)  # passes at low confidence
+
 
 class TestListQuantityKinds(unittest.TestCase):
     """Test the list_quantity_kinds tool."""

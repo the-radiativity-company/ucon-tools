@@ -152,6 +152,9 @@ class ValidationResult(BaseModel):
     actual_dimension: str
     expected_dimension: str
     dimension_match: bool
+    result_kind: str | None = None
+    kind_match: bool | None = None
+    kind_candidates: list[str] = []
     semantic_warnings: list[str] = []
     confidence: str  # "high", "medium", "low"
     explanation: str
