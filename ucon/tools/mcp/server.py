@@ -438,6 +438,7 @@ class ConversionResult(BaseModel):
     quantity: float
     unit: str | None
     dimension: str
+    kind: str | None = None
     uncertainty: float | None = None
     source_scalable: bool | None = None
     target_scalable: bool | None = None
@@ -629,6 +630,7 @@ def convert(
     to_unit: str,
     custom_units: list[dict] | None = None,
     custom_edges: list[dict] | None = None,
+    kind: str | None = None,
     include_scalability: bool = False,
     ctx: Context | None = None,
 ) -> ConversionResult | ConversionError:
@@ -653,6 +655,10 @@ def convert(
             Each dict should have: {"name": str, "dimension": str, "aliases": [str]}
         custom_edges: Optional list of inline conversion edges for this call only.
             Each dict should have: {"src": str, "dst": str, "factor": float}
+        kind: Optional kind-of-quantity name to annotate the measurement.
+            When provided, the Number is tagged with this kind and Number.to()
+            preserves it through conversion. The kind must exist in the lattice
+            and its dimension must match the source unit's dimension.
         include_scalability: When True, populate ``source_scalable`` and
             ``target_scalable`` on the result, reflecting the leaf-unit
             ``Unit.scalable`` flag. ``None`` for composite ``UnitProduct``
@@ -695,9 +701,42 @@ def convert(
             if err:
                 return err
 
-            # 3. Perform conversion
+            # 3. Resolve kind if provided
+            resolved_kind = None
+            if kind is not None:
+                from ucon.kinds import KindNotFound
+                session = _get_session(ctx)
+                lattice = session.get_kind_lattice()
+                try:
+                    resolved_kind = lattice.get(kind)
+                except KindNotFound:
+                    return ConversionError(
+                        error=f"Unknown kind: '{kind}'",
+                        error_type="unknown_kind",
+                        parameter="kind",
+                        hints=[
+                            "Use list_quantity_kinds() to see available kinds.",
+                            "Or define a custom kind with define_quantity_kind().",
+                        ],
+                    )
+                # Validate kind dimension matches source unit
+                src_dim = src.dimension if hasattr(src, 'dimension') else None
+                if src_dim is not None and resolved_kind.dimension != src_dim:
+                    return ConversionError(
+                        error=(
+                            f"Kind '{kind}' has dimension '{resolved_kind.dimension.name}' "
+                            f"but source unit '{from_unit}' has dimension '{src_dim.name}'"
+                        ),
+                        error_type="kind_dimension_mismatch",
+                        parameter="kind",
+                        hints=[
+                            f"Use a kind whose dimension matches '{src_dim.name}'.",
+                        ],
+                    )
+
+            # 4. Perform conversion
             try:
-                num = Number(quantity=value, unit=src)
+                num = Number(quantity=value, unit=src, kind=resolved_kind)
                 result = num.to(dst, graph=graph)
             except DimensionMismatch:
                 return build_dimension_mismatch_error(from_unit, to_unit, src, dst)
@@ -715,11 +754,13 @@ def convert(
     # may lose unit info due to dimension cancellation.
     unit_str = to_unit
     dim_name = dst.dimension.name if hasattr(dst, 'dimension') else "none"
+    result_kind = result.kind.name if result.kind is not None else None
 
     return ConversionResult(
         quantity=result.quantity,
         unit=unit_str,
         dimension=dim_name,
+        kind=result_kind,
         uncertainty=result.uncertainty,
         source_scalable=_unit_scalable(src) if include_scalability else None,
         target_scalable=_unit_scalable(dst) if include_scalability else None,

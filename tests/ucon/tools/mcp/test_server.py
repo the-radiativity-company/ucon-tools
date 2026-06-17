@@ -73,6 +73,58 @@ class TestConvertTool(unittest.TestCase):
         self.assertIsNone(result.uncertainty)
 
 
+class TestConvertKind(unittest.TestCase):
+    """Test the convert tool's kind parameter."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import convert, ConversionResult, _reset_fallback_session
+            from ucon.tools.mcp.suggestions import ConversionError
+            cls.convert = staticmethod(convert)
+            cls.ConversionResult = ConversionResult
+            cls.ConversionError = ConversionError
+            cls._reset_fallback_session = staticmethod(_reset_fallback_session)
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+        self._reset_fallback_session()
+
+    def tearDown(self):
+        if not self.skip_tests:
+            self._reset_fallback_session()
+
+    def test_convert_with_kind_preserved(self):
+        """Test that kind is preserved through conversion."""
+        result = self.convert(1000, "J", "kJ", kind="energy")
+        self.assertIsInstance(result, self.ConversionResult)
+        self.assertEqual(result.kind, "energy")
+        self.assertAlmostEqual(result.quantity, 1.0)
+
+    def test_convert_without_kind_is_none(self):
+        """Test that kind is None when not provided."""
+        result = self.convert(1000, "J", "kJ")
+        self.assertIsInstance(result, self.ConversionResult)
+        self.assertIsNone(result.kind)
+
+    def test_convert_with_unknown_kind_rejected(self):
+        """Test that an unknown kind name is rejected."""
+        result = self.convert(1, "m", "km", kind="nonexistent_kind")
+        self.assertIsInstance(result, self.ConversionError)
+        self.assertEqual(result.error_type, "unknown_kind")
+
+    def test_convert_kind_dimension_mismatch_rejected(self):
+        """Test that kind dimension must match source unit dimension."""
+        # "energy" has dimension M·L²·T⁻², but "m" has dimension L
+        result = self.convert(1, "m", "km", kind="energy")
+        self.assertIsInstance(result, self.ConversionError)
+        self.assertEqual(result.error_type, "kind_dimension_mismatch")
+
+
 class TestConvertLeftToRightAssociativity(unittest.TestCase):
     """Test that unit expression parsing uses left-to-right associativity.
 
