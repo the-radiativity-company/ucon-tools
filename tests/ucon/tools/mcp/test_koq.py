@@ -818,6 +818,65 @@ class TestListQuantityKinds(unittest.TestCase):
         self.assertNotIn("my_bond_energy", names)
 
 
+class TestListKindFormulas(unittest.TestCase):
+    """Test the list_kind_formulas tool."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import (
+                list_kind_formulas,
+                _reset_fallback_session,
+            )
+            cls.list_kind_formulas = staticmethod(list_kind_formulas)
+            cls._reset_fallback_session = staticmethod(_reset_fallback_session)
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+        self._reset_fallback_session()
+
+    def tearDown(self):
+        if not self.skip_tests:
+            self._reset_fallback_session()
+
+    def test_list_kind_formulas_returns_entries(self):
+        """Test that list_kind_formulas returns seeded entries."""
+        result = self.list_kind_formulas()
+        self.assertIsInstance(result, list)
+        # comprehensive.ucon.toml ships at least 1 kind formula
+        self.assertGreaterEqual(len(result), 1)
+
+    def test_list_kind_formulas_structure(self):
+        """Test that each formula entry has the expected keys."""
+        result = self.list_kind_formulas()
+        self.assertGreater(len(result), 0)
+        for entry in result:
+            self.assertIn("name", entry)
+            self.assertIn("expression", entry)
+            self.assertIn("input_kinds", entry)
+            self.assertIn("output_kind", entry)
+            self.assertIn("generalizes", entry)
+            self.assertIn("commutative", entry)
+            # input_kinds should be a dict of str -> str
+            self.assertIsInstance(entry["input_kinds"], dict)
+            for binding, kind_name in entry["input_kinds"].items():
+                self.assertIsInstance(binding, str)
+                self.assertIsInstance(kind_name, str)
+            self.assertIsInstance(entry["output_kind"], str)
+            self.assertIsInstance(entry["generalizes"], bool)
+            self.assertIsInstance(entry["commutative"], bool)
+
+    def test_list_kind_formulas_sorted_by_name(self):
+        """Test that formulas are returned sorted by name."""
+        result = self.list_kind_formulas()
+        names = [f["name"] for f in result]
+        self.assertEqual(names, sorted(names))
+
+
 class TestExtendBasis(unittest.TestCase):
     """Test the extend_basis tool."""
 

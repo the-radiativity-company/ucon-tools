@@ -3935,6 +3935,45 @@ def list_quantity_kinds(
 
 
 @mcp.tool()
+@_dispatched_tool("list_kind_formulas")
+def list_kind_formulas(
+    ctx: Context | None = None,
+) -> list[dict]:
+    """
+    List all registered kind formulas from the FormulaRegistry.
+
+    Kind formulas define how kinds compose under arithmetic operations
+    (multiplication, division). Each formula maps input kinds to an output
+    kind, controlling how kind annotations propagate through calculations.
+
+    Returns:
+        Sorted list of formula metadata dicts.
+
+    Example:
+        list_kind_formulas()
+        # -> [{"name": "absorbed_dose_from_kerma", "expression": "D * w_R", ...}, ...]
+    """
+    session = _get_session(ctx)
+    registry = session.get_formula_registry()
+
+    result = []
+    for formula in registry:
+        result.append({
+            "name": formula.name,
+            "expression": formula.expression,
+            "input_kinds": {
+                binding: kind.name
+                for binding, kind in formula.input_kinds.items()
+            },
+            "output_kind": formula.output_kind.name,
+            "generalizes": formula.generalizes,
+            "commutative": formula.commutative,
+        })
+
+    return sorted(result, key=lambda f: f["name"])
+
+
+@mcp.tool()
 @_dispatched_tool("extend_basis")
 def extend_basis(
     name: str,
