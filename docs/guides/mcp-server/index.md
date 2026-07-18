@@ -55,7 +55,7 @@ Convert a value from one unit to another.
 
 ```python
 convert(value=5, from_unit="km", to_unit="mi")
-# → {"quantity": 3.107, "unit": "mi", "dimension": "length"}
+# → {"quantity": 3.107, "unit": "mi", "dimension": "length", "kind": null}
 ```
 
 Supports:
@@ -64,6 +64,13 @@ Supports:
 - Scaled units: `km`, `mL`, `kg`, `MHz`
 - Composite units: `m/s`, `kg*m/s^2`, `N*m`
 - Exponents: `m^2`, `s^-1` (ASCII) or `m²`, `s⁻¹` (Unicode)
+
+Pass the optional `kind` parameter to annotate the measurement with a quantity kind; the annotation threads through the conversion:
+
+```python
+convert(value=2, from_unit="Gy", to_unit="mGy", kind="absorbed_dose")
+# → {"quantity": 2000.0, "unit": "mGy", "dimension": "specific_energy", "kind": "absorbed_dose"}
+```
 
 ### `decompose`
 
@@ -221,6 +228,19 @@ define_quantity_kind(
 
 Quantity kinds identify physically distinct quantities that share the same dimensional signature (e.g., entropy change vs heat capacity).
 
+The optional `parent` and `join_policy` parameters place the new kind in the built-in kind hierarchy:
+
+```python
+define_quantity_kind(
+    name="committed_dose",
+    dimension="specific_energy",
+    description="Dose integrated over 50 years post-intake",
+    parent="dose_equivalent",
+    join_policy="lca"
+)
+# → {"success": true, "name": "committed_dose", "parent": "dose_equivalent", "join_policy": "lca", ...}
+```
+
 ### `declare_computation`
 
 Declare computational intent before performing a calculation.
@@ -237,7 +257,7 @@ Establishes the expected quantity kind so `validate_result()` can verify the res
 
 ### `validate_result`
 
-Validate that a computed result matches the declared quantity kind.
+Validate that a computed result matches the declared quantity kind — dimension *and* kind.
 
 ```python
 validate_result(
@@ -248,7 +268,48 @@ validate_result(
 # → {"passed": true, "confidence": "high", "semantic_warnings": [], ...}
 ```
 
-Checks dimensional consistency and analyzes reasoning text for semantic conflicts.
+Checks dimensional consistency, verifies the result's kind against the declared kind, and analyzes reasoning text for semantic conflicts.
+
+Kind checking catches errors that dimensional analysis alone cannot. Gray (absorbed dose) and sievert (dose equivalent) share the dimension `specific_energy`, so a dimension check passes either way — but a sievert result cannot satisfy an `absorbed_dose` declaration:
+
+```python
+validate_result(value=2, unit="Gy", declared_kind="absorbed_dose")
+# → {"passed": true, "kind_match": true, "result_kind": "absorbed_dose",
+#    "explanation": "Result validated as 'absorbed_dose' (kind verified)", ...}
+
+validate_result(value=40, unit="Sv", declared_kind="absorbed_dose")
+# → {"passed": false, "dimension_match": true, "kind_match": false,
+#    "result_kind": "dose_equivalent", "confidence": "high",
+#    "explanation": "Kind mismatch: declared 'absorbed_dose' but result unit
+#                    implies 'dose_equivalent'. These share dimension 'L²·T⁻²'
+#                    but are physically distinct and cannot be conflated.", ...}
+```
+
+The result's kind is resolved from unit conventions (Sv → `dose_equivalent`, Gy → `absorbed_dose`, Bq → `radioactive_activity`), declared-kind membership, and the kind lattice. See the [tool reference](https://docs.ucon.dev/reference/mcp-tools/#validate_result) for the full resolution rules.
+
+### `list_quantity_kinds`
+
+List built-in and session-defined quantity kinds, optionally filtered by dimension or category.
+
+```python
+list_quantity_kinds(dimension="specific_energy")
+# → [{"name": "absorbed_dose", "dimension_name": "specific_energy",
+#     "parent": "specific_energy", "join_policy": "lca", "source": "builtin", ...}, ...]
+
+list_quantity_kinds(category="builtin")
+# → [all 27 built-in lattice kinds]
+```
+
+### `list_kind_formulas`
+
+List kind-arithmetic rules from the FormulaRegistry — the formulas that let kinded quantities combine (e.g., ICRP 103's `H = D · w_R`).
+
+```python
+list_kind_formulas()
+# → [{"name": "radiation_weighting", "expression": "D * w_R",
+#     "input_kinds": {"D": "absorbed_dose", "w_R": "radiation_weighting_factor"},
+#     "output_kind": "dose_equivalent", "commutative": true, ...}]
+```
 
 ### `list_formulas`
 
