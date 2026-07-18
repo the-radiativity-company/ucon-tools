@@ -112,10 +112,11 @@ ucon-mcp --transport sse    # SSE transport for remote clients
 
 | Tool | Description |
 |------|-------------|
-| `define_quantity_kind` | Register a quantity kind for disambiguation |
+| `define_quantity_kind` | Register a quantity kind, optionally placed in the kind hierarchy |
 | `declare_computation` | Declare expected quantity kind before computing |
-| `validate_result` | Validate that a result matches the declared kind |
-| `list_quantity_kinds` | List registered quantity kinds |
+| `validate_result` | Validate that a result matches the declared kind (dimension *and* kind) |
+| `list_quantity_kinds` | List built-in and session-defined quantity kinds |
+| `list_kind_formulas` | List kind-arithmetic rules from the FormulaRegistry |
 | `extend_basis` | Create an extended dimensional basis |
 | `list_extended_bases` | List session-defined extended bases |
 
