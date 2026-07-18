@@ -24,7 +24,7 @@ from ucon.basis.transforms import BasisTransform
 from ucon import KindMismatch
 from ucon.formulas.exceptions import FormulaNotFound
 from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_conversion_graph  # noqa: F401 – using_conversion_graph used only for inline-graph overrides (custom_units/custom_edges)
-from ucon.kinds import JoinRefused
+from ucon.kinds import JoinPolicy, JoinRefused, Kind, KindNotFound, NameCollision
 from ucon.system import UnitSystem, use as use_system, active_system
 from ucon.maps import LinearMap
 from ucon.tools.mcp.formulas import list_formulas as _list_formulas, get_formula
@@ -705,7 +705,6 @@ def convert(
             # 3. Resolve kind if provided
             resolved_kind = None
             if kind is not None:
-                from ucon.kinds import KindNotFound
                 session = _get_session(ctx)
                 lattice = session.get_kind_lattice()
                 try:
@@ -3566,7 +3565,6 @@ def define_quantity_kind(
         pass  # KindNotFound — name is not a built-in
 
     # Resolve parent kind if provided
-    from ucon.kinds import Kind, KindNotFound, NameCollision, JoinPolicy
     parent_kind = None
     if parent is not None:
         try:
@@ -3757,6 +3755,20 @@ def declare_computation(
     return decl
 
 
+# Convention table: units whose kind is procedurally constituted and
+# cannot be inferred from the dimension alone.  Keyed by both the
+# canonical name and the shorthand symbol.  Used by validate_result's
+# layer-1 result-kind resolution.
+UNIT_KIND_CONVENTIONS: dict[str, str] = {
+    "Sv": "dose_equivalent",
+    "sievert": "dose_equivalent",
+    "Gy": "absorbed_dose",
+    "gray": "absorbed_dose",
+    "Bq": "radioactive_activity",
+    "becquerel": "radioactive_activity",
+}
+
+
 @mcp.tool()
 @_dispatched_tool("validate_result")
 def validate_result(
@@ -3798,8 +3810,6 @@ def validate_result(
     # Try the lattice first (covers built-in kinds from
     # comprehensive.ucon.toml), then fall back to the session
     # QuantityKindInfo dict.
-    from ucon.kinds import KindNotFound
-
     kind_name: str
     expected_dimension: str
     declared_kind_obj = None  # lattice Kind, if resolvable
@@ -3887,18 +3897,6 @@ def validate_result(
     kind_match: bool | None = None
     kind_candidates: list[str] = []
 
-    # Convention table: units whose kind is procedurally constituted and
-    # cannot be inferred from the dimension alone.  Keyed by both the
-    # canonical name and the shorthand symbol.
-    _UNIT_KIND_CONVENTIONS: dict[str, str] = {
-        "Sv": "dose_equivalent",
-        "sievert": "dose_equivalent",
-        "Gy": "absorbed_dose",
-        "gray": "absorbed_dose",
-        "Bq": "radioactive_activity",
-        "becquerel": "radioactive_activity",
-    }
-
     if dimension_match and declared_kind_obj is not None:
         result_dim = parsed_unit.dimension if hasattr(parsed_unit, 'dimension') else None
         if result_dim is not None:
@@ -3910,9 +3908,9 @@ def validate_result(
             unit_shorthand = getattr(parsed_unit, 'shorthand', None)
             unit_name = getattr(parsed_unit, 'name', unit)
             conv_kind_name = (
-                _UNIT_KIND_CONVENTIONS.get(unit_shorthand or "")
-                or _UNIT_KIND_CONVENTIONS.get(unit_name)
-                or _UNIT_KIND_CONVENTIONS.get(unit)
+                UNIT_KIND_CONVENTIONS.get(unit_shorthand or "")
+                or UNIT_KIND_CONVENTIONS.get(unit_name)
+                or UNIT_KIND_CONVENTIONS.get(unit)
             )
             conv_kind_obj = None
             if conv_kind_name:
@@ -4049,6 +4047,8 @@ def list_quantity_kinds(
         dimension: Optional filter by dimension (e.g., "energy/amount_of_substance"
             or vector notation "M·L²·T⁻²·N⁻¹").
         category: Optional filter by category (e.g., "thermodynamic", "mechanical").
+            Built-in lattice kinds all carry category "builtin", so
+            category="builtin" selects exactly the built-in set.
         include_builtin: Include built-in kinds from the KindLattice (default True).
             Set to False to see only session-defined kinds.
 
@@ -4109,9 +4109,9 @@ def list_quantity_kinds(
             vec = _render_dimension_to_vector(lattice_kind.dimension)
             if dimension_vector and vec != dimension_vector:
                 continue
-            # Built-in kinds don't carry a category string; skip
-            # category filter for them (they wouldn't match anyway).
-            if category:
+            # Built-in kinds all report category "builtin"; honor the
+            # category filter accordingly.
+            if category and category != "builtin":
                 continue
 
             seen.add(lattice_kind.name)

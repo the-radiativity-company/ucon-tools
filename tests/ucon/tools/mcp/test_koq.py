@@ -781,6 +781,25 @@ class TestListQuantityKinds(unittest.TestCase):
         for k in result:
             self.assertEqual(k["dimension_vector"], energy_vec)
 
+    def test_list_builtin_category_filter(self):
+        """category="builtin" selects exactly the built-in set."""
+        result = self.list_quantity_kinds(category="builtin")
+        self.assertIsInstance(result, list)
+        self.assertGreaterEqual(len(result), 20)
+        for k in result:
+            self.assertEqual(k["source"], "builtin")
+            self.assertEqual(k["category"], "builtin")
+
+        # A non-builtin category filter still excludes built-ins
+        self.define_quantity_kind(
+            name="my_thermo_kind",
+            dimension="energy",
+            description="Session kind",
+            category="thermodynamic",
+        )
+        result = self.list_quantity_kinds(category="thermodynamic")
+        self.assertEqual([k["name"] for k in result], ["my_thermo_kind"])
+
     def test_list_session_overrides_builtin(self):
         """Test that session kinds override built-in kinds by name."""
         # Define a session kind with the same name as a built-in
