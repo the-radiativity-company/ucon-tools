@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-06-17
+## [0.8.0] - 2026-07-18
 
 KOQ tool surface overhaul: surfaces ucon v2.1.x kind-of-quantity
 capabilities through MCP tool signatures and closes the B5 gap
@@ -19,7 +19,9 @@ capabilities through MCP tool signatures and closes the B5 gap
   from `comprehensive.ucon.toml` (~26 entries) are now visible alongside
   session-defined kinds. New `include_builtin` parameter (default `True`)
   controls whether built-in kinds appear. Entries carry `parent`,
-  `join_policy`, and `source` ("builtin" vs "session") fields.
+  `join_policy`, and `source` ("builtin" vs "session") fields. Built-in
+  entries report category `"builtin"`, and `category="builtin"` selects
+  exactly the built-in set.
 - **`define_quantity_kind` gains `parent` and `join_policy` parameters.**
   User-defined kinds can now be placed in a hierarchy with `parent=`
   (resolved via the lattice) and carry a `join_policy` of `"lca"` or
@@ -48,9 +50,9 @@ capabilities through MCP tool signatures and closes the B5 gap
   would pass at high confidence. Now, three-layer result-kind resolution
   applies:
 
-  1. **UNIT_KIND_CONVENTIONS** — a small, auditable table for units whose
-     kind is procedurally constituted (Sv→dose_equivalent,
-     Gy→absorbed_dose, Bq→radioactive_activity).
+  1. **`UNIT_KIND_CONVENTIONS`** — a small, auditable module-level table
+     for units whose kind is procedurally constituted
+     (Sv→dose_equivalent, Gy→absorbed_dose, Bq→radioactive_activity).
   2. **Declared-kind membership** — when the declared kind is among the
      lattice's `kinds_for_dimension()` candidates, the declaration is
      accepted as a verified match.
