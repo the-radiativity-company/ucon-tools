@@ -24,7 +24,7 @@ from ucon.basis.transforms import BasisTransform
 from ucon import KindMismatch
 from ucon.formulas.exceptions import FormulaNotFound
 from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_conversion_graph  # noqa: F401 – using_conversion_graph used only for inline-graph overrides (custom_units/custom_edges)
-from ucon.kinds import JoinRefused
+from ucon.kinds import JoinPolicy, JoinRefused, Kind, KindNotFound, NameCollision
 from ucon.system import UnitSystem, use as use_system, active_system
 from ucon.maps import LinearMap
 from ucon.tools.mcp.formulas import list_formulas as _list_formulas, get_formula
@@ -438,6 +438,7 @@ class ConversionResult(BaseModel):
     quantity: float
     unit: str | None
     dimension: str
+    kind: str | None = None
     uncertainty: float | None = None
     source_scalable: bool | None = None
     target_scalable: bool | None = None
@@ -532,6 +533,7 @@ class FormulaResult(BaseModel):
     quantity: float
     unit: str | None
     dimension: str
+    kind: str | None = None
     uncertainty: float | None = None
 
 
@@ -629,6 +631,7 @@ def convert(
     to_unit: str,
     custom_units: list[dict] | None = None,
     custom_edges: list[dict] | None = None,
+    kind: str | None = None,
     include_scalability: bool = False,
     ctx: Context | None = None,
 ) -> ConversionResult | ConversionError:
@@ -653,6 +656,10 @@ def convert(
             Each dict should have: {"name": str, "dimension": str, "aliases": [str]}
         custom_edges: Optional list of inline conversion edges for this call only.
             Each dict should have: {"src": str, "dst": str, "factor": float}
+        kind: Optional kind-of-quantity name to annotate the measurement.
+            When provided, the Number is tagged with this kind and Number.to()
+            preserves it through conversion. The kind must exist in the lattice
+            and its dimension must match the source unit's dimension.
         include_scalability: When True, populate ``source_scalable`` and
             ``target_scalable`` on the result, reflecting the leaf-unit
             ``Unit.scalable`` flag. ``None`` for composite ``UnitProduct``
@@ -695,9 +702,41 @@ def convert(
             if err:
                 return err
 
-            # 3. Perform conversion
+            # 3. Resolve kind if provided
+            resolved_kind = None
+            if kind is not None:
+                session = _get_session(ctx)
+                lattice = session.get_kind_lattice()
+                try:
+                    resolved_kind = lattice.get(kind)
+                except KindNotFound:
+                    return ConversionError(
+                        error=f"Unknown kind: '{kind}'",
+                        error_type="unknown_kind",
+                        parameter="kind",
+                        hints=[
+                            "Use list_quantity_kinds() to see available kinds.",
+                            "Or define a custom kind with define_quantity_kind().",
+                        ],
+                    )
+                # Validate kind dimension matches source unit
+                src_dim = src.dimension if hasattr(src, 'dimension') else None
+                if src_dim is not None and resolved_kind.dimension != src_dim:
+                    return ConversionError(
+                        error=(
+                            f"Kind '{kind}' has dimension '{resolved_kind.dimension.name}' "
+                            f"but source unit '{from_unit}' has dimension '{src_dim.name}'"
+                        ),
+                        error_type="kind_dimension_mismatch",
+                        parameter="kind",
+                        hints=[
+                            f"Use a kind whose dimension matches '{src_dim.name}'.",
+                        ],
+                    )
+
+            # 4. Perform conversion
             try:
-                num = Number(quantity=value, unit=src)
+                num = Number(quantity=value, unit=src, kind=resolved_kind)
                 result = num.to(dst, graph=graph)
             except DimensionMismatch:
                 return build_dimension_mismatch_error(from_unit, to_unit, src, dst)
@@ -715,11 +754,13 @@ def convert(
     # may lose unit info due to dimension cancellation.
     unit_str = to_unit
     dim_name = dst.dimension.name if hasattr(dst, 'dimension') else "none"
+    result_kind = result.kind.name if result.kind is not None else None
 
     return ConversionResult(
         quantity=result.quantity,
         unit=unit_str,
         dimension=dim_name,
+        kind=result_kind,
         uncertainty=result.uncertainty,
         source_scalable=_unit_scalable(src) if include_scalability else None,
         target_scalable=_unit_scalable(dst) if include_scalability else None,
@@ -3132,11 +3173,13 @@ def call_formula(
         if result.unit is not None:
             unit_str = result.unit.shorthand
         dim = _number_dimension(result)
+        result_kind = result.kind.name if result.kind is not None else None
         return FormulaResult(
             formula=name,
             quantity=result.quantity,
             unit=unit_str,
             dimension=dim.name,
+            kind=result_kind,
             uncertainty=result.uncertainty,
         )
     else:
@@ -3444,6 +3487,8 @@ def define_quantity_kind(
     aliases: list[str] | None = None,
     category: str = "session",
     disambiguation_hints: list[str] | None = None,
+    parent: str | None = None,
+    join_policy: str = "lca",
     ctx: Context | None = None,
 ) -> QuantityKindDefinitionResult | KOQError:
     """
@@ -3462,6 +3507,12 @@ def define_quantity_kind(
         aliases: Alternative names for the kind.
         category: Classification (defaults to "session").
         disambiguation_hints: Tips for distinguishing from similar kinds.
+        parent: Optional parent kind name. The parent must already exist in the
+            lattice (built-in or previously defined). The child inherits its
+            dimension and sits below the parent in the kind hierarchy.
+        join_policy: Policy when joining distinct descendants at this kind.
+            "lca" (default) lifts to the lowest common ancestor.
+            "refuse" blocks the join — use a named formula instead.
 
     Returns:
         QuantityKindDefinitionResult on success.
@@ -3479,6 +3530,16 @@ def define_quantity_kind(
     session = _get_session(ctx)
     aliases = aliases or []
     disambiguation_hints = disambiguation_hints or []
+
+    # Validate join_policy
+    valid_policies = {"lca", "refuse"}
+    if join_policy not in valid_policies:
+        return KOQError(
+            error=f"Invalid join_policy: '{join_policy}'",
+            error_type="invalid_join_policy",
+            parameter="join_policy",
+            hints=[f"Must be one of: {', '.join(sorted(valid_policies))}"],
+        )
 
     # Check for duplicate in session kinds (QuantityKindInfo registry)
     session_kinds = session.get_quantity_kinds()
@@ -3503,6 +3564,22 @@ def define_quantity_kind(
     except Exception:
         pass  # KindNotFound — name is not a built-in
 
+    # Resolve parent kind if provided
+    parent_kind = None
+    if parent is not None:
+        try:
+            parent_kind = lattice.get(parent)
+        except KindNotFound:
+            return KOQError(
+                error=f"Unknown parent kind: '{parent}'",
+                error_type="unknown_parent",
+                parameter="parent",
+                hints=[
+                    "The parent must already exist in the lattice.",
+                    "Use list_quantity_kinds() to see available kinds.",
+                ],
+            )
+
     # Parse dimension to vector notation (session-aware so extended-basis
     # dimensions are accepted).
     vector_signature = _parse_dimension_to_vector(dimension, session=session)
@@ -3518,6 +3595,8 @@ def define_quantity_kind(
             ],
         )
 
+    resolved_join_policy = JoinPolicy(join_policy)
+
     # Create and register the QuantityKindInfo (MCP wire format).
     kind_info = QuantityKindInfo(
         name=name,
@@ -3527,6 +3606,8 @@ def define_quantity_kind(
         aliases=tuple(aliases),
         category=category,
         disambiguation_hints=tuple(disambiguation_hints),
+        parent=parent,
+        join_policy=join_policy,
     )
     session.register_quantity_kind(kind_info)
 
@@ -3536,11 +3617,12 @@ def define_quantity_kind(
     if not builtin_kind_exists:
         dim_obj = _parse_dimension_object(dimension, session=session)
         if dim_obj is not None:
-            from ucon.kinds import Kind, NameCollision
             lattice_kind = Kind(
                 name=name,
                 dimension=dim_obj,
                 aliases=tuple(aliases),
+                parent=parent_kind,
+                join_policy=resolved_join_policy,
             )
             try:
                 lattice.register(lattice_kind)
@@ -3553,6 +3635,8 @@ def define_quantity_kind(
         dimension=dimension,
         vector_signature=vector_signature,
         category=category,
+        parent=parent,
+        join_policy=join_policy,
         message=(
             f"Quantity kind '{name}' registered for session. "
             f"Use declare_computation() to gate a calculation by this kind, then "
@@ -3671,6 +3755,20 @@ def declare_computation(
     return decl
 
 
+# Convention table: units whose kind is procedurally constituted and
+# cannot be inferred from the dimension alone.  Keyed by both the
+# canonical name and the shorthand symbol.  Used by validate_result's
+# layer-1 result-kind resolution.
+UNIT_KIND_CONVENTIONS: dict[str, str] = {
+    "Sv": "dose_equivalent",
+    "sievert": "dose_equivalent",
+    "Gy": "absorbed_dose",
+    "gray": "absorbed_dose",
+    "Bq": "radioactive_activity",
+    "becquerel": "radioactive_activity",
+}
+
+
 @mcp.tool()
 @_dispatched_tool("validate_result")
 def validate_result(
@@ -3706,19 +3804,40 @@ def validate_result(
     """
     session = _get_session(ctx)
     session_kinds = session.get_quantity_kinds()
+    lattice = session.get_kind_lattice()
 
-    # Get the kind to validate against
+    # ── Resolve declared kind ──────────────────────────────────────────
+    # Try the lattice first (covers built-in kinds from
+    # comprehensive.ucon.toml), then fall back to the session
+    # QuantityKindInfo dict.
+    kind_name: str
+    expected_dimension: str
+    declared_kind_obj = None  # lattice Kind, if resolvable
+    kind_info = None  # QuantityKindInfo, for dimension-only fallback
+
     if declared_kind is not None:
-        kind = get_quantity_kind(declared_kind, session_kinds)
-        if kind is None:
+        kind_name = declared_kind
+        # Try lattice
+        try:
+            declared_kind_obj = lattice.get(declared_kind)
+        except KindNotFound:
+            pass
+        # Try session dict
+        kind_info = get_quantity_kind(declared_kind, session_kinds)
+
+        if declared_kind_obj is None and kind_info is None:
             return KOQError(
                 error=f"Unknown quantity kind: '{declared_kind}'",
                 error_type="unknown_kind",
                 parameter="declared_kind",
                 hints=["Use list_quantity_kinds() to see available kinds"],
             )
-        kind_name = declared_kind
-        expected_dimension = kind.dimension_vector
+        if declared_kind_obj is not None:
+            expected_dimension = _render_dimension_to_vector(declared_kind_obj.dimension)
+        elif kind_info is not None:
+            expected_dimension = kind_info.dimension_vector
+        else:
+            expected_dimension = "unknown"
     else:
         # Use active declaration
         active = session.get_active_computation()
@@ -3732,11 +3851,20 @@ def validate_result(
                     "Or specify declared_kind parameter",
                 ],
             )
-        kind = get_quantity_kind(active.quantity_kind, session_kinds)
         kind_name = active.quantity_kind
-        expected_dimension = kind.dimension_vector if kind else "unknown"
+        try:
+            declared_kind_obj = lattice.get(kind_name)
+        except KindNotFound:
+            pass
+        kind_info = get_quantity_kind(kind_name, session_kinds)
+        if declared_kind_obj is not None:
+            expected_dimension = _render_dimension_to_vector(declared_kind_obj.dimension)
+        elif kind_info is not None:
+            expected_dimension = kind_info.dimension_vector
+        else:
+            expected_dimension = "unknown"
 
-    # Parse result unit
+    # ── Parse result unit ──────────────────────────────────────────────
     parsed_unit, err = resolve_unit(unit, parameter="unit")
     if err:
         return KOQError(
@@ -3749,31 +3877,137 @@ def validate_result(
     actual_dimension = _get_dimension_vector(parsed_unit)
     dimension_match = actual_dimension == expected_dimension
 
-    # Check semantic consistency if reasoning provided
-    semantic_warnings = []
-    if reasoning and kind:
+    # ── Check semantic consistency if reasoning provided ────────────────
+    semantic_warnings: list[str] = []
+    if reasoning and (kind_info or declared_kind_obj):
         semantic_warnings = check_semantic_conflicts(kind_name, reasoning)
 
-    # Determine confidence level
+    # ── Lattice-join kind enforcement (B5) ─────────────────────────────
+    #
+    # A unit does NOT uniquely determine a kind (Sv and Gy share the same
+    # dimension).  Result-kind recovery uses three layers:
+    #
+    # 1. UNIT_KIND_CONVENTIONS — a small, auditable table for units where
+    #    convention uniquely pins a kind (Sv→dose_equivalent, Gy→absorbed_dose).
+    # 2. kinds_for_dimension() leaf filtering — when exactly one non-ancestor
+    #    candidate exists, use it.
+    # 3. Declared-kind membership — if the declared kind is among the
+    #    candidates, accept (ambiguous if siblings exist under REFUSE parent).
+    result_kind_name: str | None = None
+    kind_match: bool | None = None
+    kind_candidates: list[str] = []
+
+    if dimension_match and declared_kind_obj is not None:
+        result_dim = parsed_unit.dimension if hasattr(parsed_unit, 'dimension') else None
+        if result_dim is not None:
+            candidates = lattice.kinds_for_dimension(result_dim)
+            candidate_names = {k.name for k in candidates}
+
+            # Layer 1: convention map — try shorthand, then name, then
+            # the raw user string.
+            unit_shorthand = getattr(parsed_unit, 'shorthand', None)
+            unit_name = getattr(parsed_unit, 'name', unit)
+            conv_kind_name = (
+                UNIT_KIND_CONVENTIONS.get(unit_shorthand or "")
+                or UNIT_KIND_CONVENTIONS.get(unit_name)
+                or UNIT_KIND_CONVENTIONS.get(unit)
+            )
+            conv_kind_obj = None
+            if conv_kind_name:
+                try:
+                    conv_kind_obj = lattice.get(conv_kind_name)
+                except KindNotFound:
+                    pass
+
+            if conv_kind_obj is not None:
+                # Convention resolved — use lattice join to check
+                result_kind_name = conv_kind_name
+                try:
+                    joined = lattice.join(declared_kind_obj, conv_kind_obj)
+                    kind_match = joined.name == declared_kind_obj.name
+                except JoinRefused:
+                    kind_match = False
+            else:
+                # Layer 2+3: no convention — use dimension candidates
+                if declared_kind_obj.name in candidate_names:
+                    # Declared kind is among the candidates for this
+                    # dimension — the declaration is consistent with the
+                    # result unit.  Accept as a verified match: the caller
+                    # asserted the kind, and the dimension confirms it is a
+                    # valid kind for this unit.
+                    result_kind_name = declared_kind_obj.name
+                    kind_match = True
+                else:
+                    # Declared kind is NOT among the candidates.  Filter
+                    # to leaf kinds (no children in the candidate set).
+                    leaf_candidates = [
+                        k for k in candidates
+                        if not any(
+                            c.parent is not None and c.parent.name == k.name
+                            for c in candidates
+                        )
+                    ]
+                    if len(leaf_candidates) == 1:
+                        result_kind_name = leaf_candidates[0].name
+                        try:
+                            joined = lattice.join(declared_kind_obj, leaf_candidates[0])
+                            kind_match = joined.name == declared_kind_obj.name
+                        except JoinRefused:
+                            kind_match = False
+                    elif len(leaf_candidates) > 1:
+                        kind_candidates = sorted(k.name for k in leaf_candidates)
+                        kind_match = None
+                    else:
+                        kind_match = None
+
+    # ── Determine confidence level and outcome ────────────────────────
+    suggestions: list[str] = []
+
     if not dimension_match:
         confidence = "low"
         passed = False
         explanation = f"Dimension mismatch: got '{actual_dimension}', expected '{expected_dimension}'"
+        suggestions.append(f"Check that '{unit}' is the correct unit for '{kind_name}'")
+    elif kind_match is False:
+        # Kind enforcement fired: JoinRefused or LCA divergence
+        confidence = "high"
+        passed = False
+        if result_kind_name:
+            explanation = (
+                f"Kind mismatch: declared '{kind_name}' but result unit implies "
+                f"'{result_kind_name}'. These share dimension '{actual_dimension}' "
+                f"but are physically distinct and cannot be conflated."
+            )
+            suggestions.append(
+                f"Use a unit associated with '{kind_name}', not '{result_kind_name}'."
+            )
+        else:
+            explanation = f"Kind mismatch: result does not refine declared kind '{kind_name}'"
+    elif kind_match is None and kind_candidates:
+        # Ambiguous: dimension matches but kind can't be verified
+        confidence = "low"
+        passed = True
+        explanation = (
+            f"Dimension matches '{kind_name}' but result kind is ambiguous. "
+            f"Candidates: {', '.join(kind_candidates)}"
+        )
+        semantic_warnings.append(
+            f"Cannot verify kind match: unit '{unit}' is compatible with multiple "
+            f"kinds: {', '.join(kind_candidates)}. Consider using convert() with "
+            f"kind= to thread kind annotations."
+        )
     elif semantic_warnings:
         confidence = "medium"
         passed = True
         explanation = "Dimension matches but reasoning may indicate different quantity"
+        suggestions.append("Review reasoning to ensure it matches the declared quantity kind")
     else:
         confidence = "high"
         passed = True
-        explanation = f"Result validated as '{kind_name}'"
-
-    # Build suggestions
-    suggestions = []
-    if not dimension_match:
-        suggestions.append(f"Check that '{unit}' is the correct unit for '{kind_name}'")
-    if semantic_warnings:
-        suggestions.append("Review reasoning to ensure it matches the declared quantity kind")
+        if kind_match is True:
+            explanation = f"Result validated as '{kind_name}' (kind verified)"
+        else:
+            explanation = f"Result validated as '{kind_name}'"
 
     # Clear active declaration
     session.set_active_computation(None)
@@ -3786,6 +4020,9 @@ def validate_result(
         actual_dimension=actual_dimension,
         expected_dimension=expected_dimension,
         dimension_match=dimension_match,
+        result_kind=result_kind_name,
+        kind_match=kind_match,
+        kind_candidates=kind_candidates,
         semantic_warnings=semantic_warnings,
         confidence=confidence,
         explanation=explanation,
@@ -3798,6 +4035,7 @@ def validate_result(
 def list_quantity_kinds(
     dimension: str | None = None,
     category: str | None = None,
+    include_builtin: bool = True,
     ctx: Context | None = None,
 ) -> list[dict] | KOQError:
     """
@@ -3809,6 +4047,10 @@ def list_quantity_kinds(
         dimension: Optional filter by dimension (e.g., "energy/amount_of_substance"
             or vector notation "M·L²·T⁻²·N⁻¹").
         category: Optional filter by category (e.g., "thermodynamic", "mechanical").
+            Built-in lattice kinds all carry category "builtin", so
+            category="builtin" selects exactly the built-in set.
+        include_builtin: Include built-in kinds from the KindLattice (default True).
+            Set to False to see only session-defined kinds.
 
     Returns:
         List of quantity kind information dicts.
@@ -3832,28 +4074,100 @@ def list_quantity_kinds(
         if dimension_vector is None:
             dimension_vector = dimension
 
-    # Collect session-defined kinds
-    all_kinds = list(session_kinds.values())
+    # Index session kinds by name for dedup against built-ins
+    seen: set[str] = set()
+    result: list[dict] = []
 
-    # Apply filters
-    result = []
-    for kind in all_kinds:
-        if dimension_vector and kind.dimension_vector != dimension_vector:
+    # Session-defined kinds take priority
+    for kind in session_kinds.values():
+        vec = kind.dimension_vector
+        if dimension_vector and vec != dimension_vector:
             continue
         if category and kind.category != category:
             continue
 
+        seen.add(kind.name)
         result.append({
             "name": kind.name,
             "dimension_name": kind.dimension_name,
-            "dimension_vector": kind.dimension_vector,
+            "dimension_vector": vec,
             "description": kind.description,
             "aliases": list(kind.aliases),
             "category": kind.category,
             "disambiguation_hints": list(kind.disambiguation_hints),
+            "parent": kind.parent if hasattr(kind, "parent") else None,
+            "join_policy": kind.join_policy if hasattr(kind, "join_policy") else "lca",
+            "source": "session",
         })
 
-    return sorted(result, key=lambda k: (k["category"], k["name"]))
+    # Built-in kinds from the KindLattice
+    if include_builtin:
+        lattice = session.get_kind_lattice()
+        for lattice_kind in lattice:
+            if lattice_kind.name in seen:
+                continue
+            vec = _render_dimension_to_vector(lattice_kind.dimension)
+            if dimension_vector and vec != dimension_vector:
+                continue
+            # Built-in kinds all report category "builtin"; honor the
+            # category filter accordingly.
+            if category and category != "builtin":
+                continue
+
+            seen.add(lattice_kind.name)
+            result.append({
+                "name": lattice_kind.name,
+                "dimension_name": lattice_kind.dimension.name,
+                "dimension_vector": vec,
+                "description": "",
+                "aliases": list(lattice_kind.aliases),
+                "category": "builtin",
+                "disambiguation_hints": [],
+                "parent": lattice_kind.parent.name if lattice_kind.parent else None,
+                "join_policy": lattice_kind.join_policy.value,
+                "source": "builtin",
+            })
+
+    return sorted(result, key=lambda k: (k["source"], k["name"]))
+
+
+@mcp.tool()
+@_dispatched_tool("list_kind_formulas")
+def list_kind_formulas(
+    ctx: Context | None = None,
+) -> list[dict]:
+    """
+    List all registered kind formulas from the FormulaRegistry.
+
+    Kind formulas define how kinds compose under arithmetic operations
+    (multiplication, division). Each formula maps input kinds to an output
+    kind, controlling how kind annotations propagate through calculations.
+
+    Returns:
+        Sorted list of formula metadata dicts.
+
+    Example:
+        list_kind_formulas()
+        # -> [{"name": "absorbed_dose_from_kerma", "expression": "D * w_R", ...}, ...]
+    """
+    session = _get_session(ctx)
+    registry = session.get_formula_registry()
+
+    result = []
+    for formula in registry:
+        result.append({
+            "name": formula.name,
+            "expression": formula.expression,
+            "input_kinds": {
+                binding: kind.name
+                for binding, kind in formula.input_kinds.items()
+            },
+            "output_kind": formula.output_kind.name,
+            "generalizes": formula.generalizes,
+            "commutative": formula.commutative,
+        })
+
+    return sorted(result, key=lambda f: f["name"])
 
 
 @mcp.tool()

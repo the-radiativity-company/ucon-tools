@@ -89,6 +89,7 @@ _CORE_TOOLS: frozenset[str] = frozenset({
     "declare_computation",
     "validate_result",
     "list_quantity_kinds",
+    "list_kind_formulas",
     "list_extended_bases",
     "list_formulas",
     "call_formula",

@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-18
+
+KOQ tool surface overhaul: surfaces ucon v2.1.x kind-of-quantity
+capabilities through MCP tool signatures and closes the B5 gap
+(`validate_result` now enforces *kind*, not merely *dimension*).
+
+### Added
+
+- **`list_quantity_kinds` introspects the KindLattice.** Built-in kinds
+  from `comprehensive.ucon.toml` (~26 entries) are now visible alongside
+  session-defined kinds. New `include_builtin` parameter (default `True`)
+  controls whether built-in kinds appear. Entries carry `parent`,
+  `join_policy`, and `source` ("builtin" vs "session") fields. Built-in
+  entries report category `"builtin"`, and `category="builtin"` selects
+  exactly the built-in set.
+- **`define_quantity_kind` gains `parent` and `join_policy` parameters.**
+  User-defined kinds can now be placed in a hierarchy with `parent=`
+  (resolved via the lattice) and carry a `join_policy` of `"lca"` or
+  `"refuse"`. Invalid parents and policies return structured `KOQError`
+  responses.
+- **`list_kind_formulas` — new read-only tool.** Exposes the active
+  `FormulaRegistry` entries (kind-arithmetic rules) loaded from
+  `comprehensive.ucon.toml`. Returns `name`, `expression`,
+  `input_kinds`, `output_kind`, `generalizes`, `commutative` for each.
+- **`convert()` gains optional `kind` parameter.** Callers can tag a
+  conversion as "this is a measurement of a specific kind" (e.g.
+  `kind="energy"`). The kind is validated against the source unit's
+  dimension, threaded through `Number(kind=...)`, and surfaced on the
+  result. `ConversionResult` gains a `kind` field.
+- **`call_formula()` result surfaces `kind`.** When formula arithmetic
+  produces a kinded `Number`, the `kind` field on `FormulaResult` is
+  populated.
+- **`ValidationResult` gains `result_kind`, `kind_match`, and
+  `kind_candidates` fields** for richer introspection of B5 enforcement.
+
+### Changed
+
+- **`validate_result` rewritten with lattice-join kind enforcement (B5).**
+  Previously, `validate_result` only checked dimension equality, so
+  declaring `absorbed_dose` and validating with `Sv` (dose_equivalent)
+  would pass at high confidence. Now, three-layer result-kind resolution
+  applies:
+
+  1. **`UNIT_KIND_CONVENTIONS`** — a small, auditable module-level table
+     for units whose kind is procedurally constituted
+     (Sv→dose_equivalent, Gy→absorbed_dose, Bq→radioactive_activity).
+  2. **Declared-kind membership** — when the declared kind is among the
+     lattice's `kinds_for_dimension()` candidates, the declaration is
+     accepted as a verified match.
+  3. **Leaf candidate filtering + lattice join** — when the declared kind
+     is not among candidates, `lattice.join()` checks compatibility.
+     `JoinRefused` produces a `kind_mismatch` failure at high confidence.
+
+  Confidence policy: `"high"` only on verified kind match; `"low"` with
+  `semantic_warning` on ambiguity; `passed=False` on `JoinRefused` or
+  LCA divergence.
+
 ## [0.7.0] - 2026-06-16
 
 Closes remaining gaps from the ucon v2.0 full-adoption plan and adopts

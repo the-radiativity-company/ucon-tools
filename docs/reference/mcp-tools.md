@@ -17,6 +17,7 @@ Convert a numeric value from one unit to another.
 | `to_unit` | string | Yes | Target unit string |
 | `custom_units` | list[dict] | No | Inline unit definitions |
 | `custom_edges` | list[dict] | No | Inline conversion edges |
+| `kind` | string | No | Kind-of-quantity name to annotate the measurement (e.g. `"absorbed_dose"`). Must exist in the kind lattice and match the source unit's dimension; preserved through conversion and surfaced on the result |
 
 ### Response Schema
 
@@ -27,6 +28,7 @@ Convert a numeric value from one unit to another.
   "quantity": 3.107,
   "unit": "mi",
   "dimension": "length",
+  "kind": null,
   "uncertainty": null
 }
 ```
@@ -52,6 +54,10 @@ convert(value=5, from_unit="km", to_unit="mi")
 # Composite units
 convert(value=10, from_unit="m/s", to_unit="km/h")
 # → {"quantity": 36.0, "unit": "km/h", "dimension": "velocity"}
+
+# Kind-annotated conversion
+convert(value=2, from_unit="Gy", to_unit="mGy", kind="absorbed_dose")
+# → {"quantity": 2000.0, "unit": "mGy", "dimension": "specific_energy", "kind": "absorbed_dose"}
 
 # With inline custom unit
 convert(
@@ -719,9 +725,14 @@ Invoke a registered formula with dimensionally-validated inputs.
   "quantity": 22.86,
   "unit": "kg/m²",
   "dimension": "derived(mass/length²)",
+  "kind": null,
   "uncertainty": null
 }
 ```
+
+When formula arithmetic produces a kind-annotated `Number` (kind-aware
+inputs composing through a registered kind formula), `kind` carries the
+resulting kind name; otherwise it is `null`.
 
 **Error: `FormulaError`**
 
@@ -848,6 +859,8 @@ Register a quantity kind for semantic disambiguation.
 | `aliases` | list[str] | No | Alternative names |
 | `category` | string | No | Classification (default: "session") |
 | `disambiguation_hints` | list[str] | No | Tips for distinguishing from similar kinds |
+| `parent` | string | No | Parent kind name (must already exist in the lattice). The child inherits its dimension and sits below the parent in the kind hierarchy |
+| `join_policy` | string | No | Policy when joining distinct descendants at this kind: `"lca"` (default) lifts to the lowest common ancestor; `"refuse"` blocks the join |
 
 ### Response Schema
 
@@ -860,6 +873,8 @@ Register a quantity kind for semantic disambiguation.
   "dimension": "energy/amount_of_substance",
   "vector_signature": "M·L²·T⁻²·N⁻¹",
   "category": "session",
+  "parent": null,
+  "join_policy": "lca",
   "message": "Quantity kind 'reaction_gibbs_energy' registered for session."
 }
 ```
@@ -895,6 +910,17 @@ define_quantity_kind(
     aliases=["delta_S"],
     category="thermodynamic"
 )
+
+# Place a kind in the hierarchy under a built-in parent
+define_quantity_kind(
+    name="committed_dose",
+    dimension="specific_energy",
+    description="Dose integrated over 50 years post-intake",
+    parent="dose_equivalent",
+    join_policy="lca"
+)
+# → {"success": true, "name": "committed_dose", "vector_signature": "L²·T⁻²",
+#    "parent": "dose_equivalent", "join_policy": "lca", ...}
 ```
 
 ---
@@ -968,8 +994,23 @@ declare_computation(
 
 Validate that a computed result matches the declared quantity kind.
 
-Call this after `compute()` to verify dimensional and semantic consistency.
+Call this after `compute()` to verify dimensional, kind, and semantic consistency.
 Uses the active declaration from `declare_computation()` if `declared_kind` is not specified.
+
+Beyond dimension equality, `validate_result` enforces *kind*: two units can
+share a dimension yet denote physically distinct quantities (Sv vs Gy both
+carry L²·T⁻²). The result's kind is recovered in three layers:
+
+1. **`UNIT_KIND_CONVENTIONS`** — a small module-level table for units whose
+   kind is fixed by convention (Sv→dose_equivalent, Gy→absorbed_dose,
+   Bq→radioactive_activity).
+2. **Declared-kind membership** — the declared kind appearing among the
+   lattice's candidates for the result dimension counts as a verified match.
+3. **Leaf-candidate filtering + lattice join** — otherwise `lattice.join()`
+   checks compatibility; a refused join fails validation at high confidence.
+
+When the kind cannot be pinned, validation still passes on dimension but
+reports `confidence: "low"` and lists `kind_candidates`.
 
 ### Parameters
 
@@ -993,10 +1034,39 @@ Uses the active declaration from `declare_computation()` if `declared_kind` is n
   "actual_dimension": "M·L²·T⁻²·N⁻¹",
   "expected_dimension": "M·L²·T⁻²·N⁻¹",
   "dimension_match": true,
+  "result_kind": "gibbs_energy",
+  "kind_match": true,
+  "kind_candidates": [],
   "semantic_warnings": [],
   "confidence": "high",
-  "explanation": "Result validated as 'gibbs_energy'",
+  "explanation": "Result validated as 'gibbs_energy' (kind verified)",
   "suggestions": []
+}
+```
+
+`result_kind` is the kind recovered from the result unit (or `null` when it
+cannot be determined); `kind_match` is `true`/`false` when enforcement could
+run and `null` when the kind is ambiguous; `kind_candidates` lists the
+possibilities in the ambiguous case.
+
+**Kind mismatch (dimension matches, kinds refuse to join):**
+
+```json
+{
+  "passed": false,
+  "value": 40.0,
+  "unit": "Sv",
+  "declared_kind": "absorbed_dose",
+  "actual_dimension": "L²·T⁻²",
+  "expected_dimension": "L²·T⁻²",
+  "dimension_match": true,
+  "result_kind": "dose_equivalent",
+  "kind_match": false,
+  "kind_candidates": [],
+  "semantic_warnings": [],
+  "confidence": "high",
+  "explanation": "Kind mismatch: declared 'absorbed_dose' but result unit implies 'dose_equivalent'. These share dimension 'L²·T⁻²' but are physically distinct and cannot be conflated.",
+  "suggestions": ["Use a unit associated with 'absorbed_dose', not 'dose_equivalent'."]
 }
 ```
 
@@ -1011,6 +1081,9 @@ Uses the active declaration from `declare_computation()` if `declared_kind` is n
   "actual_dimension": "M·L²·T⁻²·N⁻¹",
   "expected_dimension": "M·L²·T⁻²·N⁻¹",
   "dimension_match": true,
+  "result_kind": "gibbs_energy",
+  "kind_match": true,
+  "kind_candidates": [],
   "semantic_warnings": [
     "Reasoning mentions 'ΔH' which is associated with 'enthalpy', but declared kind is 'gibbs_energy'"
   ],
@@ -1051,6 +1124,105 @@ validate_result(
     declared_kind="entropy_change",
     reasoning="Computed ΔS = Q/T for isothermal heat transfer"
 )
+
+# Kind enforcement: correct dimension, wrong kind
+validate_result(value=40, unit="Sv", declared_kind="absorbed_dose")
+# → {"passed": false, "kind_match": false, "result_kind": "dose_equivalent", ...}
+```
+
+---
+
+## list_quantity_kinds
+
+List built-in and session-defined quantity kinds.
+
+Built-in kinds come from the `KindLattice` shipped in
+`comprehensive.ucon.toml` (27 entries); session kinds come from
+`define_quantity_kind()`. Session kinds take priority on name collision.
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `dimension` | string | No | Filter by dimension (name like `"energy/amount_of_substance"` or vector notation `"M·L²·T⁻²·N⁻¹"`) |
+| `category` | string | No | Filter by category. Built-in kinds all report category `"builtin"`, so `category="builtin"` selects exactly the built-in set |
+| `include_builtin` | bool | No | Include built-in lattice kinds (default `true`). Set `false` to see only session-defined kinds |
+
+### Response Schema
+
+Sorted list of kind dicts:
+
+```json
+[
+  {
+    "name": "absorbed_dose",
+    "dimension_name": "specific_energy",
+    "dimension_vector": "L²·T⁻²",
+    "description": "",
+    "aliases": [],
+    "category": "builtin",
+    "disambiguation_hints": [],
+    "parent": "specific_energy",
+    "join_policy": "lca",
+    "source": "builtin"
+  }
+]
+```
+
+`parent` names the kind's parent in the lattice (or `null` at a root);
+`join_policy` is `"lca"` or `"refuse"`; `source` is `"builtin"` or
+`"session"`.
+
+### Examples
+
+```python
+# Everything: built-ins plus session kinds
+list_quantity_kinds()
+
+# Only the kinds sharing a dimension
+list_quantity_kinds(dimension="specific_energy")
+
+# Only session-defined kinds
+list_quantity_kinds(include_builtin=False)
+```
+
+---
+
+## list_kind_formulas
+
+List registered kind formulas from the `FormulaRegistry`.
+
+Kind formulas define how kinds compose under arithmetic (e.g. multiplying
+an `absorbed_dose` by a `radiation_weighting_factor` yields a
+`dose_equivalent`). They are the sanctioned crossings between kinds that
+`validate_result` would otherwise refuse to conflate.
+
+### Parameters
+
+None.
+
+### Response Schema
+
+Sorted list of formula dicts:
+
+```json
+[
+  {
+    "name": "radiation_weighting",
+    "expression": "D * w_R",
+    "input_kinds": {"D": "absorbed_dose", "w_R": "radiation_weighting_factor"},
+    "output_kind": "dose_equivalent",
+    "generalizes": false,
+    "commutative": true
+  }
+]
+```
+
+### Examples
+
+```python
+list_kind_formulas()
+# → [{"name": "radiation_weighting", "expression": "D * w_R", ...}]
 ```
 
 ---
@@ -1064,6 +1236,8 @@ validate_result(
 | `dimension_mismatch` | Result dimension doesn't match declared kind |
 | `no_active_declaration` | `validate_result()` called without prior `declare_computation()` |
 | `invalid_unit` | Unit string cannot be parsed |
+| `unknown_parent` | `parent` kind passed to `define_quantity_kind()` does not exist in the lattice |
+| `invalid_join_policy` | `join_policy` is not `"lca"` or `"refuse"` |
 
 ---
 

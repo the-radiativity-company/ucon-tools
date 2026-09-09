@@ -133,7 +133,8 @@ def test_core_bundle_contains_expected_read_only_tools():
         "list_units", "list_scales", "list_dimensions",
         "check_dimensions", "list_constants",
         "declare_computation", "validate_result",
-        "list_quantity_kinds", "list_extended_bases",
+        "list_quantity_kinds", "list_kind_formulas",
+        "list_extended_bases",
         "list_formulas", "call_formula",
         "restrict_system",
     })

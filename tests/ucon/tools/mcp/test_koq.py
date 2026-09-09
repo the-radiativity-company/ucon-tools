@@ -147,6 +147,98 @@ class TestDefineQuantityKind(unittest.TestCase):
         self.assertIsInstance(result, self.KOQError)
         self.assertEqual(result.error_type, "duplicate_kind")
 
+    def test_define_with_parent_success(self):
+        """Test defining a kind with a parent kind."""
+        # Define a parent first
+        parent_result = self.define_quantity_kind(
+            name="my_specific_energy",
+            dimension="energy/mass",
+            description="Energy per unit mass",
+        )
+        self.assertIsInstance(parent_result, self.QuantityKindDefinitionResult)
+
+        # Define a child under the parent
+        child_result = self.define_quantity_kind(
+            name="my_absorbed_dose",
+            dimension="energy/mass",
+            description="Energy absorbed per unit mass",
+            parent="my_specific_energy",
+        )
+        self.assertIsInstance(child_result, self.QuantityKindDefinitionResult)
+        self.assertTrue(child_result.success)
+        self.assertEqual(child_result.parent, "my_specific_energy")
+        self.assertEqual(child_result.join_policy, "lca")
+
+    def test_define_with_unknown_parent_rejected(self):
+        """Test that defining a kind with a nonexistent parent fails."""
+        result = self.define_quantity_kind(
+            name="orphan_kind",
+            dimension="energy",
+            description="Kind with missing parent",
+            parent="nonexistent_parent",
+        )
+        self.assertIsInstance(result, self.KOQError)
+        self.assertEqual(result.error_type, "unknown_parent")
+
+    def test_define_with_join_policy_refuse(self):
+        """Test defining a kind with REFUSE join policy."""
+        result = self.define_quantity_kind(
+            name="my_refuse_parent",
+            dimension="energy/mass",
+            description="Parent with REFUSE policy",
+            join_policy="refuse",
+        )
+        self.assertIsInstance(result, self.QuantityKindDefinitionResult)
+        self.assertTrue(result.success)
+        self.assertEqual(result.join_policy, "refuse")
+
+    def test_define_with_invalid_join_policy(self):
+        """Test that invalid join_policy values are rejected."""
+        result = self.define_quantity_kind(
+            name="bad_policy_kind",
+            dimension="energy",
+            description="Kind with invalid policy",
+            join_policy="invalid",
+        )
+        self.assertIsInstance(result, self.KOQError)
+        self.assertEqual(result.error_type, "invalid_join_policy")
+
+    def test_lattice_join_after_hierarchy(self):
+        """Test that lattice join works correctly after defining hierarchy."""
+        from ucon.tools.mcp.server import _get_session, _reset_fallback_session
+        from ucon.kinds import JoinRefused
+
+        # Define parent with REFUSE policy
+        self.define_quantity_kind(
+            name="my_se",
+            dimension="energy/mass",
+            description="Specific energy parent",
+            join_policy="refuse",
+        )
+        # Define two children
+        self.define_quantity_kind(
+            name="my_ad",
+            dimension="energy/mass",
+            description="Absorbed dose",
+            parent="my_se",
+        )
+        self.define_quantity_kind(
+            name="my_de",
+            dimension="energy/mass",
+            description="Dose equivalent",
+            parent="my_se",
+        )
+
+        # Access the lattice and test join behavior
+        session = _get_session(None)
+        lattice = session.get_kind_lattice()
+        ad = lattice.get("my_ad")
+        de = lattice.get("my_de")
+
+        # Joining siblings under a REFUSE parent should raise JoinRefused
+        with self.assertRaises(JoinRefused):
+            lattice.join(ad, de)
+
 
 class TestDeclareComputation(unittest.TestCase):
     """Test the declare_computation tool."""
@@ -550,6 +642,81 @@ class TestValidateResult(unittest.TestCase):
         self.assertIsInstance(result, self.KOQError)
         self.assertEqual(result.error_type, "unknown_kind")
 
+    # -- B5 enforcement: lattice-join kind checks ----------------------------
+
+    def test_validate_with_builtin_kind_no_prior_define(self):
+        """validate_result works with built-in kind names directly.
+
+        B5: callers should be able to validate against built-in kinds
+        (e.g., 'energy') without a prior define_quantity_kind call.
+        """
+        result = self.validate_result(
+            value=100.0,
+            unit="J",
+            declared_kind="energy",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertTrue(result.passed)
+        self.assertTrue(result.dimension_match)
+
+    def test_validate_sv_vs_absorbed_dose_fails(self):
+        """B5 reproduction: Sv against absorbed_dose must FAIL.
+
+        absorbed_dose and dose_equivalent share dimension specific_energy
+        but their parent has join_policy=REFUSE. The lattice.join() raises
+        JoinRefused, so validate_result must reject this.
+        """
+        result = self.validate_result(
+            value=2.5,
+            unit="Sv",
+            declared_kind="absorbed_dose",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertFalse(result.passed)
+        self.assertTrue(result.dimension_match)
+        self.assertFalse(result.kind_match)
+        self.assertEqual(result.confidence, "high")
+
+    def test_validate_gy_vs_absorbed_dose_passes(self):
+        """B5: Gy against absorbed_dose should PASS at high confidence."""
+        result = self.validate_result(
+            value=2.5,
+            unit="Gy",
+            declared_kind="absorbed_dose",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertTrue(result.passed)
+        self.assertTrue(result.dimension_match)
+        self.assertEqual(result.confidence, "high")
+
+    def test_validate_dimension_mismatch_still_fails(self):
+        """Dimension mismatch is still caught regardless of kind enforcement."""
+        result = self.validate_result(
+            value=100.0,
+            unit="m/s",
+            declared_kind="energy",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertFalse(result.passed)
+        self.assertFalse(result.dimension_match)
+        self.assertEqual(result.confidence, "low")
+
+    def test_validate_result_kind_candidates_on_ambiguity(self):
+        """When result kind is ambiguous, kind_candidates lists options."""
+        # J/kg is ambiguous: absorbed_dose, dose_equivalent, specific_energy
+        result = self.validate_result(
+            value=2.5,
+            unit="J/kg",
+            declared_kind="absorbed_dose",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertTrue(result.dimension_match)
+        # If multiple leaf candidates, should be ambiguous
+        if result.kind_candidates:
+            self.assertIsNone(result.kind_match)
+            self.assertEqual(result.confidence, "low")
+            self.assertTrue(result.passed)  # passes at low confidence
+
 
 class TestListQuantityKinds(unittest.TestCase):
     """Test the list_quantity_kinds tool."""
@@ -580,11 +747,72 @@ class TestListQuantityKinds(unittest.TestCase):
         if not self.skip_tests:
             self._reset_fallback_session()
 
-    def test_list_empty_session(self):
-        """Test listing kinds when no kinds are defined."""
-        result = self.list_quantity_kinds()
+    def test_list_session_only_empty(self):
+        """Test listing session-only kinds when none are defined."""
+        result = self.list_quantity_kinds(include_builtin=False)
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 0)
+
+    def test_list_includes_builtin_kinds(self):
+        """Test that list includes built-in kinds from the KindLattice."""
+        result = self.list_quantity_kinds()
+        self.assertIsInstance(result, list)
+        # comprehensive.ucon.toml ships ~26 built-in kinds
+        self.assertGreaterEqual(len(result), 20)
+        # Verify structure of built-in entries
+        names = [k["name"] for k in result]
+        self.assertIn("energy", names)
+        # Check fields present on built-in entries
+        builtin = next(k for k in result if k["source"] == "builtin")
+        self.assertIn("parent", builtin)
+        self.assertIn("join_policy", builtin)
+        self.assertIn("dimension_vector", builtin)
+
+    def test_list_builtin_dimension_filter(self):
+        """Test filtering built-in kinds by dimension."""
+        # Get energy dimension vector first
+        all_kinds = self.list_quantity_kinds()
+        energy_kind = next(k for k in all_kinds if k["name"] == "energy")
+        energy_vec = energy_kind["dimension_vector"]
+
+        result = self.list_quantity_kinds(dimension="energy")
+        self.assertIsInstance(result, list)
+        self.assertGreaterEqual(len(result), 1)
+        for k in result:
+            self.assertEqual(k["dimension_vector"], energy_vec)
+
+    def test_list_builtin_category_filter(self):
+        """category="builtin" selects exactly the built-in set."""
+        result = self.list_quantity_kinds(category="builtin")
+        self.assertIsInstance(result, list)
+        self.assertGreaterEqual(len(result), 20)
+        for k in result:
+            self.assertEqual(k["source"], "builtin")
+            self.assertEqual(k["category"], "builtin")
+
+        # A non-builtin category filter still excludes built-ins
+        self.define_quantity_kind(
+            name="my_thermo_kind",
+            dimension="energy",
+            description="Session kind",
+            category="thermodynamic",
+        )
+        result = self.list_quantity_kinds(category="thermodynamic")
+        self.assertEqual([k["name"] for k in result], ["my_thermo_kind"])
+
+    def test_list_session_overrides_builtin(self):
+        """Test that session kinds override built-in kinds by name."""
+        # Define a session kind with the same name as a built-in
+        self.define_quantity_kind(
+            name="energy",
+            dimension="energy",
+            description="Session override",
+            category="custom",
+        )
+        result = self.list_quantity_kinds()
+        energy_entries = [k for k in result if k["name"] == "energy"]
+        self.assertEqual(len(energy_entries), 1)
+        self.assertEqual(energy_entries[0]["source"], "session")
 
     def test_list_session_kinds(self):
         """Test that list includes session-defined kinds."""
@@ -598,10 +826,12 @@ class TestListQuantityKinds(unittest.TestCase):
 
         result = self.list_quantity_kinds()
         self.assertIsInstance(result, list)
-        self.assertEqual(len(result), 1)
+        # Should include both builtins + the session kind
+        custom_kinds = [k for k in result if k["name"] == "my_custom_kind"]
+        self.assertEqual(len(custom_kinds), 1)
 
-        kind = result[0]
-        self.assertEqual(kind["name"], "my_custom_kind")
+        kind = custom_kinds[0]
+        self.assertEqual(kind["source"], "session")
         self.assertIn("dimension_vector", kind)
         self.assertIn("description", kind)
         self.assertIn("category", kind)
@@ -610,57 +840,61 @@ class TestListQuantityKinds(unittest.TestCase):
         """Test filtering by dimension."""
         # Define kinds with different dimensions
         self.define_quantity_kind(
-            name="enthalpy",
+            name="my_enthalpy",
             dimension="energy/amount_of_substance",
             description="Enthalpy",
         )
         self.define_quantity_kind(
-            name="work",
+            name="my_work",
             dimension="energy",
             description="Work",
         )
 
-        result = self.list_quantity_kinds(dimension="energy/amount_of_substance")
+        result = self.list_quantity_kinds(
+            dimension="energy/amount_of_substance",
+            include_builtin=False,
+        )
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["name"], "enthalpy")
+        self.assertEqual(result[0]["name"], "my_enthalpy")
 
     def test_filter_by_category(self):
         """Test filtering by category."""
         self.define_quantity_kind(
-            name="enthalpy",
+            name="my_enthalpy",
             dimension="energy/amount_of_substance",
             description="Enthalpy",
             category="thermodynamic",
         )
         self.define_quantity_kind(
-            name="work",
+            name="my_work",
             dimension="energy",
             description="Work",
             category="mechanical",
         )
 
+        # Category filter skips built-in kinds (they have category "builtin")
         result = self.list_quantity_kinds(category="thermodynamic")
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["name"], "enthalpy")
+        self.assertEqual(result[0]["name"], "my_enthalpy")
 
     def test_filter_by_dimension_and_category(self):
         """Test filtering by both dimension and category."""
         self.define_quantity_kind(
-            name="enthalpy",
+            name="my_enthalpy",
             dimension="energy/amount_of_substance",
             description="Enthalpy",
             category="thermodynamic",
         )
         self.define_quantity_kind(
-            name="gibbs_energy",
+            name="my_gibbs_energy",
             dimension="energy/amount_of_substance",
             description="Gibbs energy",
             category="thermodynamic",
         )
         self.define_quantity_kind(
-            name="bond_energy",
+            name="my_bond_energy",
             dimension="energy/amount_of_substance",
             description="Bond energy",
             category="chemical",
@@ -673,9 +907,68 @@ class TestListQuantityKinds(unittest.TestCase):
         self.assertIsInstance(result, list)
         self.assertEqual(len(result), 2)
         names = [k["name"] for k in result]
-        self.assertIn("enthalpy", names)
-        self.assertIn("gibbs_energy", names)
-        self.assertNotIn("bond_energy", names)
+        self.assertIn("my_enthalpy", names)
+        self.assertIn("my_gibbs_energy", names)
+        self.assertNotIn("my_bond_energy", names)
+
+
+class TestListKindFormulas(unittest.TestCase):
+    """Test the list_kind_formulas tool."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import (
+                list_kind_formulas,
+                _reset_fallback_session,
+            )
+            cls.list_kind_formulas = staticmethod(list_kind_formulas)
+            cls._reset_fallback_session = staticmethod(_reset_fallback_session)
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+        self._reset_fallback_session()
+
+    def tearDown(self):
+        if not self.skip_tests:
+            self._reset_fallback_session()
+
+    def test_list_kind_formulas_returns_entries(self):
+        """Test that list_kind_formulas returns seeded entries."""
+        result = self.list_kind_formulas()
+        self.assertIsInstance(result, list)
+        # comprehensive.ucon.toml ships at least 1 kind formula
+        self.assertGreaterEqual(len(result), 1)
+
+    def test_list_kind_formulas_structure(self):
+        """Test that each formula entry has the expected keys."""
+        result = self.list_kind_formulas()
+        self.assertGreater(len(result), 0)
+        for entry in result:
+            self.assertIn("name", entry)
+            self.assertIn("expression", entry)
+            self.assertIn("input_kinds", entry)
+            self.assertIn("output_kind", entry)
+            self.assertIn("generalizes", entry)
+            self.assertIn("commutative", entry)
+            # input_kinds should be a dict of str -> str
+            self.assertIsInstance(entry["input_kinds"], dict)
+            for binding, kind_name in entry["input_kinds"].items():
+                self.assertIsInstance(binding, str)
+                self.assertIsInstance(kind_name, str)
+            self.assertIsInstance(entry["output_kind"], str)
+            self.assertIsInstance(entry["generalizes"], bool)
+            self.assertIsInstance(entry["commutative"], bool)
+
+    def test_list_kind_formulas_sorted_by_name(self):
+        """Test that formulas are returned sorted by name."""
+        result = self.list_kind_formulas()
+        names = [f["name"] for f in result]
+        self.assertEqual(names, sorted(names))
 
 
 class TestExtendBasis(unittest.TestCase):
@@ -1000,8 +1293,8 @@ class TestKOQSessionReset(unittest.TestCase):
         # Reset session
         self.reset_session()
 
-        # Verify it's gone
-        kinds = self.list_quantity_kinds()
+        # Verify session kind is gone (built-in kinds remain)
+        kinds = self.list_quantity_kinds(include_builtin=False)
         self.assertEqual(len(kinds), 0)
 
     def test_reset_clears_active_computation(self):

@@ -73,6 +73,58 @@ class TestConvertTool(unittest.TestCase):
         self.assertIsNone(result.uncertainty)
 
 
+class TestConvertKind(unittest.TestCase):
+    """Test the convert tool's kind parameter."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from ucon.tools.mcp.server import convert, ConversionResult, _reset_fallback_session
+            from ucon.tools.mcp.suggestions import ConversionError
+            cls.convert = staticmethod(convert)
+            cls.ConversionResult = ConversionResult
+            cls.ConversionError = ConversionError
+            cls._reset_fallback_session = staticmethod(_reset_fallback_session)
+            cls.skip_tests = False
+        except ImportError:
+            cls.skip_tests = True
+
+    def setUp(self):
+        if self.skip_tests:
+            self.skipTest("mcp not installed")
+        self._reset_fallback_session()
+
+    def tearDown(self):
+        if not self.skip_tests:
+            self._reset_fallback_session()
+
+    def test_convert_with_kind_preserved(self):
+        """Test that kind is preserved through conversion."""
+        result = self.convert(1000, "J", "kJ", kind="energy")
+        self.assertIsInstance(result, self.ConversionResult)
+        self.assertEqual(result.kind, "energy")
+        self.assertAlmostEqual(result.quantity, 1.0)
+
+    def test_convert_without_kind_is_none(self):
+        """Test that kind is None when not provided."""
+        result = self.convert(1000, "J", "kJ")
+        self.assertIsInstance(result, self.ConversionResult)
+        self.assertIsNone(result.kind)
+
+    def test_convert_with_unknown_kind_rejected(self):
+        """Test that an unknown kind name is rejected."""
+        result = self.convert(1, "m", "km", kind="nonexistent_kind")
+        self.assertIsInstance(result, self.ConversionError)
+        self.assertEqual(result.error_type, "unknown_kind")
+
+    def test_convert_kind_dimension_mismatch_rejected(self):
+        """Test that kind dimension must match source unit dimension."""
+        # "energy" has dimension M·L²·T⁻², but "m" has dimension L
+        result = self.convert(1, "m", "km", kind="energy")
+        self.assertIsInstance(result, self.ConversionError)
+        self.assertEqual(result.error_type, "kind_dimension_mismatch")
+
+
 class TestConvertLeftToRightAssociativity(unittest.TestCase):
     """Test that unit expression parsing uses left-to-right associativity.
 
@@ -2161,6 +2213,33 @@ class TestCallFormulaEdgeCases(unittest.TestCase):
         result = self.call_formula("typerr", {"x": {"value": 5}})
         self.assertIsInstance(result, self.FormulaError)
         self.assertEqual(result.error_type, "invalid_parameter")
+
+    def test_formula_result_surfaces_kind(self):
+        """FormulaResult has a kind field that surfaces Number.kind."""
+        from ucon import parse_unit
+        from ucon.kinds import Kind
+
+        _FORMULA_REGISTRY.pop("kinded_identity", None)
+
+        dim = parse_unit("J").dimension
+        test_kind = Kind(name="test_energy_kind", dimension=dim)
+
+        @self.register_formula("kinded_identity", description="returns kinded Number")
+        def kinded_identity(x: Number) -> Number:
+            return Number(quantity=x.quantity, unit=x.unit, kind=test_kind)
+
+        result = self.call_formula("kinded_identity", {"x": {"value": 42, "unit": "J"}})
+        self.assertIsInstance(result, self.FormulaResult)
+        self.assertEqual(result.kind, "test_energy_kind")
+
+    def test_formula_result_kind_none_when_unkinded(self):
+        """FormulaResult.kind is None when the Number has no kind."""
+        result = self.call_formula("bmi", {
+            "mass": {"value": 70, "unit": "kg"},
+            "height": {"value": 1.75, "unit": "m"},
+        })
+        self.assertIsInstance(result, self.FormulaResult)
+        self.assertIsNone(result.kind)
 
 
 # -----------------------------------------------------------------------------
