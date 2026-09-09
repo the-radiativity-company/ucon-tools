@@ -1459,15 +1459,18 @@ class TestGraphCaching(unittest.TestCase):
 
     def test_same_definitions_use_cache(self):
         """Test that identical definitions use cached graph."""
-        custom_units = [{"name": "slug", "dimension": "mass", "aliases": ["slug"]}]
-        custom_edges = [{"src": "slug", "dst": "kg", "factor": 14.5939}]
+        # A name absent from ucon's catalog: a catalog unit (e.g. slug) would
+        # collide with its shipped conversion edges, coupling this caching
+        # test to the catalog's exact values.
+        custom_units = [{"name": "testmass", "dimension": "mass", "aliases": ["tsm"]}]
+        custom_edges = [{"src": "testmass", "dst": "kg", "factor": 14.5939}]
 
         # First call
-        self.convert(1, "slug", "kg", custom_units=custom_units, custom_edges=custom_edges)
+        self.convert(1, "testmass", "kg", custom_units=custom_units, custom_edges=custom_edges)
         cache_size_after_first = len(self._inline_graph_cache)
 
         # Second call with same definitions
-        self.convert(2, "slug", "kg", custom_units=custom_units, custom_edges=custom_edges)
+        self.convert(2, "testmass", "kg", custom_units=custom_units, custom_edges=custom_edges)
         cache_size_after_second = len(self._inline_graph_cache)
 
         # Cache should not grow (reusing same entry)
