@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Adopts ucon v2.1.2a1.** Dependency floor bumped from `ucon>=2.1.1` to
+  `ucon>=2.1.2a1`, picking up the customary-prefactor corrections
+  (withtwoemms/ucon#278). Graduates to the final 2.1.x floor when the
+  ucon patch train tags.
+
+### Fixed
+
+- **Graph-cache test decoupled from catalog units.**
+  `test_same_definitions_use_cache` redefined `slug` (a ucon catalog
+  unit) with a truncated edge factor, which conflicts with corrected
+  catalogs (ucon ≥ 2.1.2a1). The test now uses a catalog-absent unit
+  name, making it independent of catalog values in every ucon version.
+
 ## [0.8.0] - 2026-07-18
 
 KOQ tool surface overhaul: surfaces ucon v2.1.x kind-of-quantity
