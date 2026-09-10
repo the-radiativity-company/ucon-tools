@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ucon>=2.1.2a1`, picking up the customary-prefactor corrections
   (withtwoemms/ucon#278). Graduates to the final 2.1.x floor when the
   ucon patch train tags.
+- **Full ucon 2.1.x adoption.** Floor graduates `ucon>=2.1.2a1` →
+  `ucon>=2.1.7`, completing the alpha-adoption cycle. Picks up the whole
+  correctness train: exact customary prefactors (#278), constant symbols
+  in edge factors (#279), composite-endpoint path resolution (#280),
+  typed disjoint-kind refusals (#281), CGS mechanical `base_form`s
+  (#283), and idempotent identical-object kind re-add (#284) — all
+  issue references withtwoemms/ucon.
 
 ### Fixed
 

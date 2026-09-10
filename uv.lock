@@ -1108,14 +1108,14 @@ wheels = [
 
 [[package]]
 name = "ucon"
-version = "2.1.1"
+version = "2.1.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/97/01/d3384823de73f4432f12e61fc909e2f18f1acbe3162b372b52d45248132f/ucon-2.1.1.tar.gz", hash = "sha256:65598c4e2eed5ca45f6ac3fe52de481e6a3f052a2df41f8dd84f777fdec184c3", size = 446630, upload-time = "2026-06-16T17:55:44.785Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/d8/65d5523bbd74eb70ec9fd1d7c748006ae22d2636dc54a12691d9ade85931/ucon-2.1.7.tar.gz", hash = "sha256:2752893e149cdc50708402b04b292839f1b1402c631bc01a2457b80cae29845b", size = 453514, upload-time = "2026-09-10T01:22:01.119Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/80/83fe05e95c84c9657f954191b21a3e65bec97e73fb891bdb97b3bd5c4e60/ucon-2.1.1-py3-none-any.whl", hash = "sha256:f1403f3fcdcf2fdabef5716410d38c2ff646b3c3609fb9068255ec70818c74d1", size = 221008, upload-time = "2026-06-16T17:55:43.065Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/e5/abf338d5d34cc450416627b64d26a1c9d0e9727da3265113504fa494687e/ucon-2.1.7-py3-none-any.whl", hash = "sha256:733861a22ec952f4ede406cbd121d74a3a993e429aba2adad05741197613a0f7", size = 223670, upload-time = "2026-09-10T01:21:59.604Z" },
 ]
 
 [[package]]
@@ -1146,11 +1146,11 @@ test = [
 requires-dist = [
     { name = "anthropic", marker = "extra == 'benchmark'", specifier = ">=0.39.0" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'test'", specifier = ">=5.5" },
-    { name = "mcp", marker = "python_full_version >= '3.10' and extra == 'mcp'", specifier = ">=1.0" },
+    { name = "mcp", marker = "python_full_version >= '3.10' and extra == 'mcp'", specifier = ">=1.0,<2" },
     { name = "ollama", marker = "extra == 'benchmark'", specifier = ">=0.4.0" },
     { name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0" },
-    { name = "ucon", specifier = ">=2.1.1" },
+    { name = "ucon", specifier = ">=2.1.7" },
     { name = "ucon-tools", extras = ["mcp"], marker = "extra == 'benchmark'" },
 ]
 provides-extras = ["test", "pydantic", "mcp", "benchmark"]
