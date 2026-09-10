@@ -863,6 +863,8 @@ def list_units(
     ctx: Context | None = None,
 ) -> list[UnitInfo] | ConversionError:
     """
+    Deprecated: use discover(topic="units"). Scheduled for removal in v1.0.0.
+
     List available units, optionally filtered by dimension.
 
     Returns base units only. Use scale prefixes (from list_scales) to form
@@ -901,6 +903,8 @@ def _list_scales_body() -> list[ScaleInfo]:
 @_dispatched_tool("list_scales")
 def list_scales(ctx: Context | None = None) -> list[ScaleInfo]:
     """
+    Deprecated: use discover(topic="scales"). Scheduled for removal in v1.0.0.
+
     List available scale prefixes for units.
 
     These prefixes can be combined with scalable units (see list_units).
@@ -1418,6 +1422,8 @@ def _list_dimensions_body(ctx: Context | None = None) -> list[str]:
 @_dispatched_tool("list_dimensions")
 def list_dimensions(ctx: Context | None = None) -> list[str]:
     """
+    Deprecated: use discover(topic="dimensions"). Scheduled for removal in v1.0.0.
+
     List available physical dimensions.
 
     Dimensions represent fundamental physical quantities (length, mass, time, etc.)
@@ -1478,6 +1484,8 @@ def list_constants(
     ctx: Context | None = None,
 ) -> list[ConstantInfo] | ConstantError:
     """
+    Deprecated: use discover(topic="constants"). Scheduled for removal in v1.0.0.
+
     List available physical constants, optionally filtered by category.
 
     Categories:
@@ -2949,6 +2957,8 @@ def _compute_bridging_factors(
 @_dispatched_tool("list_formulas")
 def list_formulas(ctx: Context | None = None) -> list[FormulaInfoResponse]:
     """
+    Deprecated: use discover(topic="formulas"). Scheduled for removal in v1.0.0.
+
     List all registered domain formulas with their dimensional constraints.
 
     Returns formulas that have been registered via @register_formula decorator.
@@ -4092,6 +4102,8 @@ def list_quantity_kinds(
     ctx: Context | None = None,
 ) -> list[dict] | KOQError:
     """
+    Deprecated: use discover(topic="quantity_kinds"). Scheduled for removal in v1.0.0.
+
     List registered quantity kinds, optionally filtered.
 
     Returns both built-in and session-defined quantity kinds.
@@ -4205,6 +4217,8 @@ def list_kind_formulas(
     ctx: Context | None = None,
 ) -> list[dict]:
     """
+    Deprecated: use discover(topic="kind_formulas"). Scheduled for removal in v1.0.0.
+
     List all registered kind formulas from the FormulaRegistry.
 
     Kind formulas define how kinds compose under arithmetic operations
@@ -4421,6 +4435,8 @@ def list_extended_bases(
     ctx: Context | None = None,
 ) -> list[dict]:
     """
+    Deprecated: use discover(topic="extended_bases"). Scheduled for removal in v1.0.0.
+
     List all extended bases defined in the current session.
 
     Returns:
