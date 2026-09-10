@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, AsyncIterator, Callable, Generator, TypeVar
+from typing import TYPE_CHECKING, AsyncIterator, Callable, Generator, Literal, TypeVar
 
 from mcp.server.fastmcp import FastMCP, Context
 from pydantic import BaseModel
@@ -462,6 +462,28 @@ class ScaleInfo(BaseModel):
     factor: float
 
 
+class DiscoverResult(BaseModel):
+    """Envelope returned by the consolidated ``discover`` tool.
+
+    ``items`` entries carry the same schema as the corresponding legacy
+    ``list_*`` tool's return type, dumped to plain dicts.
+    """
+
+    topic: str
+    count: int
+    filters: dict[str, str]
+    items: list[dict]
+
+
+class DiscoverError(BaseModel):
+    """Error from the consolidated ``discover`` tool."""
+
+    error: str
+    error_type: str  # "unknown_topic" | "invalid_filter"
+    topic: str | None = None
+    likely_fix: str | None = None
+
+
 class DimensionCheck(BaseModel):
     """Result of a dimensional compatibility check."""
 
@@ -767,28 +789,11 @@ def convert(
     )
 
 
-@mcp.tool()
-@_dispatched_tool("list_units")
-def list_units(
+def _list_units_body(
     dimension: str | None = None,
     ctx: Context | None = None,
 ) -> list[UnitInfo] | ConversionError:
-    """
-    List available units, optionally filtered by dimension.
-
-    Returns base units only. Use scale prefixes (from list_scales) to form
-    scaled variants. For example, "meter" with prefix "k" becomes "km".
-
-    Includes both built-in units and session-defined units (from define_unit).
-
-    Args:
-        dimension: Optional filter by dimension name (e.g., "length", "mass", "time").
-                   Use list_dimensions() to see available dimensions.
-
-    Returns:
-        List of UnitInfo objects describing available units.
-        ConversionError if the dimension filter is invalid.
-    """
+    """Shared body for ``list_units`` and ``discover(topic="units")``."""
     import ucon.units as units_module
 
     session = _get_session(ctx)
@@ -852,6 +857,47 @@ def list_units(
 
 
 @mcp.tool()
+@_dispatched_tool("list_units")
+def list_units(
+    dimension: str | None = None,
+    ctx: Context | None = None,
+) -> list[UnitInfo] | ConversionError:
+    """
+    List available units, optionally filtered by dimension.
+
+    Returns base units only. Use scale prefixes (from list_scales) to form
+    scaled variants. For example, "meter" with prefix "k" becomes "km".
+
+    Includes both built-in units and session-defined units (from define_unit).
+
+    Args:
+        dimension: Optional filter by dimension name (e.g., "length", "mass", "time").
+                   Use list_dimensions() to see available dimensions.
+
+    Returns:
+        List of UnitInfo objects describing available units.
+        ConversionError if the dimension filter is invalid.
+    """
+    return _list_units_body(dimension=dimension, ctx=ctx)
+
+
+def _list_scales_body() -> list[ScaleInfo]:
+    """Shared body for ``list_scales`` and ``discover(topic="scales")``."""
+    result = []
+    for scale in Scale:
+        if scale == Scale.one:
+            continue  # Skip the identity scale
+        result.append(
+            ScaleInfo(
+                name=scale.name,
+                prefix=scale.shorthand,
+                factor=scale.descriptor.evaluated,
+            )
+        )
+    return sorted(result, key=lambda s: -s.factor)
+
+
+@mcp.tool()
 @_dispatched_tool("list_scales")
 def list_scales(ctx: Context | None = None) -> list[ScaleInfo]:
     """
@@ -870,18 +916,7 @@ def list_scales(ctx: Context | None = None) -> list[ScaleInfo]:
     Returns:
         List of ScaleInfo objects with name, prefix symbol, and numeric factor.
     """
-    result = []
-    for scale in Scale:
-        if scale == Scale.one:
-            continue  # Skip the identity scale
-        result.append(
-            ScaleInfo(
-                name=scale.name,
-                prefix=scale.shorthand,
-                factor=scale.descriptor.evaluated,
-            )
-        )
-    return sorted(result, key=lambda s: -s.factor)
+    return _list_scales_body()
 
 
 @mcp.tool()
@@ -1373,6 +1408,12 @@ def _build_product_from_accum(
     return UnitProduct(surviving)
 
 
+def _list_dimensions_body(ctx: Context | None = None) -> list[str]:
+    """Shared body for ``list_dimensions`` and ``discover(topic="dimensions")``."""
+    session = _get_session(ctx)
+    return sorted(_all_known_dimensions(session).keys())
+
+
 @mcp.tool()
 @_dispatched_tool("list_dimensions")
 def list_dimensions(ctx: Context | None = None) -> list[str]:
@@ -1388,8 +1429,7 @@ def list_dimensions(ctx: Context | None = None) -> list[str]:
     Returns:
         List of dimension names.
     """
-    session = _get_session(ctx)
-    return sorted(_all_known_dimensions(session).keys())
+    return _list_dimensions_body(ctx=ctx)
 
 
 # -----------------------------------------------------------------------------
@@ -1397,29 +1437,11 @@ def list_dimensions(ctx: Context | None = None) -> list[str]:
 # -----------------------------------------------------------------------------
 
 
-@mcp.tool()
-@_dispatched_tool("list_constants")
-def list_constants(
+def _list_constants_body(
     category: str | None = None,
     ctx: Context | None = None,
 ) -> list[ConstantInfo] | ConstantError:
-    """
-    List available physical constants, optionally filtered by category.
-
-    Categories:
-    - "exact": SI defining constants (c, h, e, k_B, N_A, K_cd, ΔνCs)
-    - "derived": Constants derived from exact values (ℏ, R, σ)
-    - "measured": Constants with experimental uncertainty (G, α, m_e, etc.)
-    - "session": User-defined constants for this session
-    - "all" or None: Return all constants
-
-    Args:
-        category: Optional category filter.
-
-    Returns:
-        List of ConstantInfo objects describing available constants.
-        ConstantError if the category is invalid.
-    """
+    """Shared body for ``list_constants`` and ``discover(topic="constants")``."""
     valid_categories = {"exact", "derived", "measured", "session", "all", None}
     if category not in valid_categories:
         return ConstantError(
@@ -1447,6 +1469,32 @@ def list_constants(
             result.append(_constant_to_info(const, category="session"))
 
     return sorted(result, key=lambda c: (c.category, c.symbol))
+
+
+@mcp.tool()
+@_dispatched_tool("list_constants")
+def list_constants(
+    category: str | None = None,
+    ctx: Context | None = None,
+) -> list[ConstantInfo] | ConstantError:
+    """
+    List available physical constants, optionally filtered by category.
+
+    Categories:
+    - "exact": SI defining constants (c, h, e, k_B, N_A, K_cd, ΔνCs)
+    - "derived": Constants derived from exact values (ℏ, R, σ)
+    - "measured": Constants with experimental uncertainty (G, α, m_e, etc.)
+    - "session": User-defined constants for this session
+    - "all" or None: Return all constants
+
+    Args:
+        category: Optional category filter.
+
+    Returns:
+        List of ConstantInfo objects describing available constants.
+        ConstantError if the category is invalid.
+    """
+    return _list_constants_body(category=category, ctx=ctx)
 
 
 @mcp.tool()
@@ -2927,6 +2975,11 @@ def list_formulas(ctx: Context | None = None) -> list[FormulaInfoResponse]:
             }
         ]
     """
+    return _list_formulas_body()
+
+
+def _list_formulas_body() -> list[FormulaInfoResponse]:
+    """Shared body for ``list_formulas`` and ``discover(topic="formulas")``."""
     formulas = _list_formulas()
     return [
         FormulaInfoResponse(
@@ -4063,6 +4116,21 @@ def list_quantity_kinds(
         # List all thermodynamic kinds
         list_quantity_kinds(category="thermodynamic")
     """
+    return _list_quantity_kinds_body(
+        dimension=dimension,
+        category=category,
+        include_builtin=include_builtin,
+        ctx=ctx,
+    )
+
+
+def _list_quantity_kinds_body(
+    dimension: str | None = None,
+    category: str | None = None,
+    include_builtin: bool = True,
+    ctx: Context | None = None,
+) -> list[dict] | KOQError:
+    """Shared body for ``list_quantity_kinds`` and ``discover(topic="quantity_kinds")``."""
     session = _get_session(ctx)
     session_kinds = session.get_quantity_kinds()
 
@@ -4150,6 +4218,11 @@ def list_kind_formulas(
         list_kind_formulas()
         # -> [{"name": "absorbed_dose_from_kerma", "expression": "D * w_R", ...}, ...]
     """
+    return _list_kind_formulas_body(ctx=ctx)
+
+
+def _list_kind_formulas_body(ctx: Context | None = None) -> list[dict]:
+    """Shared body for ``list_kind_formulas`` and ``discover(topic="kind_formulas")``."""
     session = _get_session(ctx)
     registry = session.get_formula_registry()
 
@@ -4361,6 +4434,11 @@ def list_extended_bases(
         list_extended_bases()
         # → [{"name": "thermodynamic", "base": "SI", "components": [...], ...}]
     """
+    return _list_extended_bases_body(ctx=ctx)
+
+
+def _list_extended_bases_body(ctx: Context | None = None) -> list[dict]:
+    """Shared body for ``list_extended_bases`` and ``discover(topic="extended_bases")``."""
     session = _get_session(ctx)
     bases = session.get_extended_bases()
 
@@ -4376,6 +4454,136 @@ def list_extended_bases(
         }
         for basis in bases.values()
     ]
+
+
+# -----------------------------------------------------------------------------
+# Consolidated Discovery Tool
+# -----------------------------------------------------------------------------
+
+
+# Filters each discover topic accepts. Filters passed for a topic outside
+# its set are rejected with error_type "invalid_filter" rather than
+# silently ignored, so agents learn the filter↔topic mapping.
+_DISCOVER_TOPICS: dict[str, frozenset[str]] = {
+    "units": frozenset({"dimension"}),
+    "scales": frozenset(),
+    "dimensions": frozenset(),
+    "constants": frozenset({"category"}),
+    "formulas": frozenset(),
+    "quantity_kinds": frozenset({"dimension", "category", "include_builtin"}),
+    "kind_formulas": frozenset(),
+    "extended_bases": frozenset(),
+}
+
+
+@mcp.tool()
+@_dispatched_tool("discover")
+def discover(
+    topic: Literal[
+        "units",
+        "scales",
+        "dimensions",
+        "constants",
+        "formulas",
+        "quantity_kinds",
+        "kind_formulas",
+        "extended_bases",
+    ],
+    dimension: str | None = None,
+    category: str | None = None,
+    include_builtin: bool = True,
+    ctx: Context | None = None,
+) -> DiscoverResult | DiscoverError | ConversionError | ConstantError | KOQError:
+    """
+    Discover what this session can see: units, scales, dimensions, constants,
+    formulas, quantity kinds, kind formulas, and extended bases — optionally
+    filtered. Results include built-in entries and anything defined in this
+    session. Consolidates the deprecated list_* tools behind one topic-keyed
+    surface.
+
+    Filters by topic:
+    - units: dimension (e.g., "length")
+    - constants: category ("exact", "derived", "measured", "session", "all")
+    - quantity_kinds: dimension, category, include_builtin
+    - all other topics take no filters
+
+    Args:
+        topic: What to discover. Required.
+        dimension: Optional dimension filter (topics: units, quantity_kinds).
+        category: Optional category filter (topics: constants, quantity_kinds).
+        include_builtin: Include built-in quantity kinds (topic: quantity_kinds).
+
+    Returns:
+        DiscoverResult with topic, count, the applied filters, and items —
+        each item carries the same schema as the corresponding legacy
+        list_* tool. DiscoverError for an unknown topic or an inapplicable
+        filter; typed errors from the underlying lookup (ConversionError,
+        ConstantError, KOQError) pass through unchanged.
+
+    Example:
+        discover(topic="units", dimension="length")
+        # → {"topic": "units", "count": 12, "filters": {"dimension": "length"},
+        #    "items": [{"name": "meter", ...}, ...]}
+    """
+    if topic not in _DISCOVER_TOPICS:
+        return DiscoverError(
+            error=f"Unknown topic: '{topic}'",
+            error_type="unknown_topic",
+            topic=topic,
+            likely_fix=f"Valid topics: {', '.join(sorted(_DISCOVER_TOPICS))}",
+        )
+
+    allowed = _DISCOVER_TOPICS[topic]
+    applied: dict[str, str] = {}
+    for filter_name, value, is_set in (
+        ("dimension", dimension, dimension is not None),
+        ("category", category, category is not None),
+        ("include_builtin", include_builtin, include_builtin is False),
+    ):
+        if not is_set:
+            continue
+        if filter_name not in allowed:
+            accepting = sorted(t for t, fs in _DISCOVER_TOPICS.items() if filter_name in fs)
+            return DiscoverError(
+                error=f"Filter '{filter_name}' does not apply to topic '{topic}'",
+                error_type="invalid_filter",
+                topic=topic,
+                likely_fix=f"Topics accepting '{filter_name}': {', '.join(accepting)}",
+            )
+        applied[filter_name] = str(value).lower() if isinstance(value, bool) else str(value)
+
+    if topic == "units":
+        units_found = _list_units_body(dimension=dimension, ctx=ctx)
+        if isinstance(units_found, ConversionError):
+            return units_found
+        items = [u.model_dump() for u in units_found]
+    elif topic == "scales":
+        items = [s.model_dump() for s in _list_scales_body()]
+    elif topic == "dimensions":
+        items = [{"name": name} for name in _list_dimensions_body(ctx=ctx)]
+    elif topic == "constants":
+        constants_found = _list_constants_body(category=category, ctx=ctx)
+        if isinstance(constants_found, ConstantError):
+            return constants_found
+        items = [c.model_dump() for c in constants_found]
+    elif topic == "formulas":
+        items = [f.model_dump() for f in _list_formulas_body()]
+    elif topic == "quantity_kinds":
+        kinds_found = _list_quantity_kinds_body(
+            dimension=dimension,
+            category=category,
+            include_builtin=include_builtin,
+            ctx=ctx,
+        )
+        if isinstance(kinds_found, KOQError):
+            return kinds_found
+        items = kinds_found
+    elif topic == "kind_formulas":
+        items = _list_kind_formulas_body(ctx=ctx)
+    else:  # extended_bases
+        items = _list_extended_bases_body(ctx=ctx)
+
+    return DiscoverResult(topic=topic, count=len(items), filters=applied, items=items)
 
 
 # -----------------------------------------------------------------------------

@@ -81,6 +81,7 @@ _CORE_TOOLS: frozenset[str] = frozenset({
     "convert",
     "compute",
     "decompose",
+    "discover",
     "list_units",
     "list_scales",
     "list_dimensions",
