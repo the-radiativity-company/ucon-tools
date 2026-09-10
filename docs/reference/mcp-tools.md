@@ -267,7 +267,74 @@ compute(
 
 ---
 
+## discover
+
+Unified discovery across everything the session can see. Consolidates the
+eight `list_*` tools behind a single `topic` parameter; each topic's
+`items` carry the same entry schema as the corresponding legacy tool.
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `topic` | string | Yes | One of `units`, `scales`, `dimensions`, `constants`, `formulas`, `quantity_kinds`, `kind_formulas`, `extended_bases` |
+| `dimension` | string | No | Filter by dimension (topics: `units`, `quantity_kinds`) |
+| `category` | string | No | Filter by category (topics: `constants`, `quantity_kinds`) |
+| `include_builtin` | bool | No | Include built-in entries (topic: `quantity_kinds`; default `true`) |
+
+Filters that do not apply to the requested topic are rejected with
+`error_type: "invalid_filter"` rather than silently ignored.
+
+### Response Schema
+
+**Success: `DiscoverResult`**
+
+```json
+{
+  "topic": "units",
+  "count": 20,
+  "filters": {"dimension": "length"},
+  "items": [
+    {"name": "angstrom", "shorthand": "Å", "aliases": ["Å", "angstroms"], "dimension": "length", "scalable": true}
+  ]
+}
+```
+
+**Error: `DiscoverError`**
+
+```json
+{
+  "error": "Filter 'dimension' does not apply to topic 'scales'",
+  "error_type": "invalid_filter",
+  "topic": "scales",
+  "likely_fix": "Topics accepting 'dimension': quantity_kinds, units"
+}
+```
+
+Typed errors from the underlying lookup (unknown dimension, unknown
+constant category) pass through unchanged as `ConversionError` /
+`ConstantError`.
+
+### Examples
+
+```python
+# Units of a given dimension
+discover(topic="units", dimension="length")
+# → {"topic": "units", "count": 20, "filters": {"dimension": "length"}, "items": [...]}
+
+# The 8 exact (SI defining) constants
+discover(topic="constants", category="exact")
+# → {"topic": "constants", "count": 8, ..., "items": [{"symbol": "Kcd", ...}, ...]}
+
+# Session-defined quantity kinds only
+discover(topic="quantity_kinds", include_builtin=False)
+```
+
+---
+
 ## list_units
+
+**Deprecated:** use `discover(topic="units")`. Scheduled for removal in v1.0.0.
 
 List available units, optionally filtered by dimension.
 
@@ -315,6 +382,8 @@ list_units(dimension="mass")
 
 ## list_scales
 
+**Deprecated:** use `discover(topic="scales")`. Scheduled for removal in v1.0.0.
+
 List available scale prefixes.
 
 ### Parameters
@@ -341,6 +410,8 @@ None.
 ---
 
 ## list_dimensions
+
+**Deprecated:** use `discover(topic="dimensions")`. Scheduled for removal in v1.0.0.
 
 List available physical dimensions.
 
@@ -481,6 +552,8 @@ convert(value=1, from_unit="slug", to_unit="lb")
 ---
 
 ## list_constants
+
+**Deprecated:** use `discover(topic="constants")`. Scheduled for removal in v1.0.0.
 
 List available physical constants, optionally filtered by category.
 
@@ -658,6 +731,8 @@ None.
 ---
 
 ## list_formulas
+
+**Deprecated:** use `discover(topic="formulas")`. Scheduled for removal in v1.0.0.
 
 List registered domain formulas with their dimensional constraints.
 
@@ -927,6 +1002,8 @@ define_quantity_kind(
 
 ## declare_computation
 
+**Deprecated:** use `validate_result(declared_kind=...)`. Scheduled for removal in v1.0.0.
+
 Declare computational intent before performing a calculation.
 
 Establishes the expected quantity kind before using `compute()` or other calculation tools.
@@ -1134,6 +1211,8 @@ validate_result(value=40, unit="Sv", declared_kind="absorbed_dose")
 
 ## list_quantity_kinds
 
+**Deprecated:** use `discover(topic="quantity_kinds")`. Scheduled for removal in v1.0.0.
+
 List built-in and session-defined quantity kinds.
 
 Built-in kinds come from the `KindLattice` shipped in
@@ -1189,6 +1268,8 @@ list_quantity_kinds(include_builtin=False)
 ---
 
 ## list_kind_formulas
+
+**Deprecated:** use `discover(topic="kind_formulas")`. Scheduled for removal in v1.0.0.
 
 List registered kind formulas from the `FormulaRegistry`.
 
@@ -1253,19 +1334,14 @@ define_quantity_kind(
     description="Change in entropy for a thermodynamic process"
 )
 
-# 2. Declare computational intent
-declare_computation(
-    quantity_kind="entropy_change",
-    expected_unit="J/K"
-)
-
-# 3. Perform calculation (using compute() or manually)
+# 2. Perform calculation (using compute() or manually)
 # ... calculation logic ...
 
-# 4. Validate the result
+# 3. Validate the result against the declared kind
 validate_result(
     value=91.5,
     unit="J/K",
+    declared_kind="entropy_change",
     reasoning="Calculated ΔS = Q/T = 25000 J / 273.15 K"
 )
 # → {"passed": true, "confidence": "high", ...}

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Tool-surface consolidation (phase 1 of 2): the discovery surface
+collapses behind a single `discover` tool, and superseded tools are
+deprecated in place. Removal lands in v1.0.0.
+
+### Added
+
+- **`discover` tool.** Unified discovery across eight topics (`units`,
+  `scales`, `dimensions`, `constants`, `formulas`, `quantity_kinds`,
+  `kind_formulas`, `extended_bases`) behind a required `topic`
+  parameter. Items carry the same entry schema as the corresponding
+  legacy `list_*` tool; applied filters are echoed back; filters that
+  do not apply to a topic are rejected with a typed `invalid_filter`
+  error instead of being silently ignored. Included in the `core`
+  capability bundle.
+
+### Deprecated
+
+- **The eight `list_*` discovery tools.** `list_units`, `list_scales`,
+  `list_dimensions`, `list_constants`, `list_formulas`,
+  `list_quantity_kinds`, `list_kind_formulas`, and
+  `list_extended_bases` now delegate to the same bodies as `discover`
+  and carry deprecation notices in their descriptions. Functional
+  through v0.9.x; scheduled for removal in v1.0.0.
+- **`declare_computation`.** Superseded by
+  `validate_result(declared_kind=...)`, which performs the same kind
+  check without a separate declaration step. Functional through
+  v0.9.x; scheduled for removal in v1.0.0.
+
 ### Changed
 
 - **Adopts ucon v2.1.2a1.** Dependency floor bumped from `ucon>=2.1.1` to
@@ -23,6 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`validate_result` no longer crashes on disjoint kinds.** With ucon
+  ≥ 2.1.5, `KindLattice.join()` raises the typed `DisjointKinds` when
+  the declared kind and the result-implied kind share no common
+  ancestor. `validate_result` now treats that as a failed validation
+  verdict (`passed: false`, high confidence) instead of propagating
+  the exception to the client.
 - **Graph-cache test decoupled from catalog units.**
   `test_same_definitions_use_cache` redefined `slug` (a ucon catalog
   unit) with a truncated edge factor, which conflicts with corrected

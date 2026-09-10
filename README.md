@@ -92,11 +92,14 @@ ucon-mcp --transport sse    # SSE transport for remote clients
 
 | Tool | Description |
 |------|-------------|
-| `list_units` | List available units, optionally filtered by dimension |
-| `list_scales` | List SI decimal and binary prefixes |
-| `list_dimensions` | List available physical dimensions |
-| `list_constants` | List physical constants (CODATA 2022) |
-| `list_formulas` | List registered domain formulas |
+| `discover` | Unified discovery across topics: units, scales, dimensions, constants, formulas, quantity kinds, kind formulas, extended bases |
+| `list_units` | *Deprecated — use `discover(topic="units")`.* List available units, optionally filtered by dimension |
+| `list_scales` | *Deprecated — use `discover(topic="scales")`.* List SI decimal and binary prefixes |
+| `list_dimensions` | *Deprecated — use `discover(topic="dimensions")`.* List available physical dimensions |
+| `list_constants` | *Deprecated — use `discover(topic="constants")`.* List physical constants (CODATA 2022) |
+| `list_formulas` | *Deprecated — use `discover(topic="formulas")`.* List registered domain formulas |
+
+The `list_*` tools remain functional through v0.9.x and are scheduled for removal in v1.0.0.
 
 **Runtime extension** — add units and conversions per session:
 
@@ -113,12 +116,20 @@ ucon-mcp --transport sse    # SSE transport for remote clients
 | Tool | Description |
 |------|-------------|
 | `define_quantity_kind` | Register a quantity kind, optionally placed in the kind hierarchy |
-| `declare_computation` | Declare expected quantity kind before computing |
+| `declare_computation` | *Deprecated — use `validate_result(declared_kind=...)`.* Declare expected quantity kind before computing |
 | `validate_result` | Validate that a result matches the declared kind (dimension *and* kind) |
-| `list_quantity_kinds` | List built-in and session-defined quantity kinds |
-| `list_kind_formulas` | List kind-arithmetic rules from the FormulaRegistry |
+| `list_quantity_kinds` | *Deprecated — use `discover(topic="quantity_kinds")`.* List built-in and session-defined quantity kinds |
+| `list_kind_formulas` | *Deprecated — use `discover(topic="kind_formulas")`.* List kind-arithmetic rules from the FormulaRegistry |
 | `extend_basis` | Create an extended dimensional basis |
-| `list_extended_bases` | List session-defined extended bases |
+| `list_extended_bases` | *Deprecated — use `discover(topic="extended_bases")`.* List session-defined extended bases |
+
+**Unit systems** — inspect and scope the active system:
+
+| Tool | Description |
+|------|-------------|
+| `restrict_system` | Restrict the active system to named units/dimensions |
+| `diff_systems` | Compare the session system against the process-base system |
+| `check_compatibility` | Check if the session system composes with the process-base without conflict |
 
 ---
 
