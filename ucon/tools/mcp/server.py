@@ -3702,8 +3702,8 @@ def define_quantity_kind(
         join_policy=join_policy,
         message=(
             f"Quantity kind '{name}' registered for session. "
-            f"Use declare_computation() to gate a calculation by this kind, then "
-            f"validate_result() to check the output."
+            f"Use validate_result(declared_kind=...) to check a computation "
+            f"against this kind."
         ),
     )
 
@@ -3717,6 +3717,8 @@ def declare_computation(
     ctx: Context | None = None,
 ) -> ComputationDeclaration | KOQError:
     """
+    Deprecated: use validate_result(declared_kind=...). Scheduled for removal in v1.0.0.
+
     Declare computational intent before performing a calculation.
 
     This tool establishes the expected quantity kind before using

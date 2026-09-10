@@ -63,7 +63,7 @@ class TestDefineQuantityKind(unittest.TestCase):
         self.assertEqual(result.category, "thermodynamic")
 
     def test_define_message_contains_capability_hint(self):
-        """Regression: define_quantity_kind message points caller at declare_computation/validate_result.
+        """Regression: define_quantity_kind message points caller at validate_result.
 
         See docs/internal/CONVENTION_response-capability-hints.md.
         """
@@ -73,8 +73,7 @@ class TestDefineQuantityKind(unittest.TestCase):
             description="Test kind",
         )
         self.assertIsInstance(result, self.QuantityKindDefinitionResult)
-        self.assertIn("declare_computation()", result.message)
-        self.assertIn("validate_result()", result.message)
+        self.assertIn("validate_result(declared_kind=...)", result.message)
 
     def test_define_kind_with_vector_notation(self):
         """Test defining a kind using vector notation for dimension."""
