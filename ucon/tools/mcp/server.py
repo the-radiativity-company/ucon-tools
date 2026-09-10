@@ -24,7 +24,7 @@ from ucon.basis.transforms import BasisTransform
 from ucon import KindMismatch
 from ucon.formulas.exceptions import FormulaNotFound
 from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_conversion_graph  # noqa: F401 – using_conversion_graph used only for inline-graph overrides (custom_units/custom_edges)
-from ucon.kinds import JoinPolicy, JoinRefused, Kind, KindNotFound, NameCollision
+from ucon.kinds import DisjointKinds, JoinPolicy, JoinRefused, Kind, KindNotFound, NameCollision
 from ucon.system import UnitSystem, use as use_system, active_system
 from ucon.maps import LinearMap
 from ucon.tools.mcp.formulas import list_formulas as _list_formulas, get_formula
@@ -3990,7 +3990,7 @@ def validate_result(
                 try:
                     joined = lattice.join(declared_kind_obj, conv_kind_obj)
                     kind_match = joined.name == declared_kind_obj.name
-                except JoinRefused:
+                except (JoinRefused, DisjointKinds):
                     kind_match = False
             else:
                 # Layer 2+3: no convention — use dimension candidates
@@ -4017,7 +4017,7 @@ def validate_result(
                         try:
                             joined = lattice.join(declared_kind_obj, leaf_candidates[0])
                             kind_match = joined.name == declared_kind_obj.name
-                        except JoinRefused:
+                        except (JoinRefused, DisjointKinds):
                             kind_match = False
                     elif len(leaf_candidates) > 1:
                         kind_candidates = sorted(k.name for k in leaf_candidates)
@@ -4034,7 +4034,7 @@ def validate_result(
         explanation = f"Dimension mismatch: got '{actual_dimension}', expected '{expected_dimension}'"
         suggestions.append(f"Check that '{unit}' is the correct unit for '{kind_name}'")
     elif kind_match is False:
-        # Kind enforcement fired: JoinRefused or LCA divergence
+        # Kind enforcement fired: JoinRefused, DisjointKinds, or LCA divergence
         confidence = "high"
         passed = False
         if result_kind_name:

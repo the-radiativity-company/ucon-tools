@@ -676,6 +676,30 @@ class TestValidateResult(unittest.TestCase):
         self.assertFalse(result.kind_match)
         self.assertEqual(result.confidence, "high")
 
+    def test_validate_disjoint_kind_fails_cleanly(self):
+        """Regression (ucon 2.1.5): DisjointKinds is a verdict, not a crash.
+
+        A session-defined root kind sharing Sv's dimension has no common
+        ancestor with dose_equivalent, so lattice.join() raises
+        DisjointKinds. validate_result must return a failed
+        ValidationResult instead of propagating the exception.
+        """
+        self.define_quantity_kind(
+            name="weird_dose",
+            dimension="specific_energy",
+            description="Root kind disjoint from the dose tree",
+        )
+        result = self.validate_result(
+            value=1.0,
+            unit="Sv",
+            declared_kind="weird_dose",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertFalse(result.passed)
+        self.assertTrue(result.dimension_match)
+        self.assertFalse(result.kind_match)
+        self.assertEqual(result.confidence, "high")
+
     def test_validate_gy_vs_absorbed_dose_passes(self):
         """B5: Gy against absorbed_dose should PASS at high confidence."""
         result = self.validate_result(
