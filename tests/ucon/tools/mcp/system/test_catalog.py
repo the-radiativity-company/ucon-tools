@@ -136,7 +136,7 @@ def test_core_bundle_contains_expected_read_only_tools():
         "list_quantity_kinds", "list_kind_formulas",
         "list_extended_bases",
         "list_formulas", "call_formula",
-        "restrict_system",
+        "restrict_system", "system",
     })
     assert CORE_BUNDLE.tools == expected
 

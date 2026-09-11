@@ -484,6 +484,15 @@ class DiscoverError(BaseModel):
     likely_fix: str | None = None
 
 
+class DefineError(BaseModel):
+    """Error from the consolidated ``define`` tool."""
+
+    error: str
+    error_type: str  # "unknown_kind" | "missing_parameter"
+    kind: str | None = None
+    likely_fix: str | None = None
+
+
 class DimensionCheck(BaseModel):
     """Result of a dimensional compatibility check."""
 
@@ -1517,6 +1526,8 @@ def define_constant(
     ctx: Context | None = None,
 ) -> ConstantDefinitionResult | ConstantError:
     """
+    Deprecated: use define(kind="constant"). Scheduled for removal in v1.0.0.
+
     Define a custom constant for the current session.
 
     The constant will be available for use in compute() and other tools
@@ -1617,7 +1628,7 @@ def define_constant(
         uncertainty=uncertainty,
         message=(
             f"Constant '{symbol}' registered for session. "
-            f"Use list_constants() to retrieve its metadata or "
+            f"Use discover(topic=\"constants\") to retrieve its metadata or "
             f"compute() to apply its value in factor chains."
         ),
     )
@@ -1633,6 +1644,8 @@ def define_unit(
     ctx: Context | None = None,
 ) -> UnitDefinitionResult | ConversionError:
     """
+    Deprecated: use define(kind="unit"). Scheduled for removal in v1.0.0.
+
     Define a custom unit for the current session.
 
     The unit will be available for all subsequent convert() and compute() calls
@@ -1740,7 +1753,7 @@ def define_unit(
         dimension=dimension,
         aliases=aliases,
         scalable=unit.scalable,
-        message=f"Unit '{name}' registered for session. Use define_conversion() to add conversion edges.",
+        message=f"Unit '{name}' registered for session. Use define(kind=\"conversion\") to add conversion edges.",
     )
 
 
@@ -1754,6 +1767,8 @@ def define_conversion(
     ctx: Context | None = None,
 ) -> ConversionDefinitionResult | ConversionError:
     """
+    Deprecated: use define(kind="conversion"). Scheduled for removal in v1.0.0.
+
     Define a conversion edge between two units for the current session.
 
     The conversion factor specifies: dst_value = src_value × factor + offset
@@ -1806,6 +1821,151 @@ def define_conversion(
     )
 
 
+# Required parameters and a corrective example for each define() kind.
+_DEFINE_KINDS: dict[str, tuple[tuple[str, ...], str]] = {
+    "unit": (
+        ("name", "dimension"),
+        'define(kind="unit", name="slug", dimension="mass")',
+    ),
+    "conversion": (
+        ("src", "dst", "factor"),
+        'define(kind="conversion", src="slug", dst="kg", factor=14.5939)',
+    ),
+    "constant": (
+        ("symbol", "name", "value", "unit"),
+        'define(kind="constant", symbol="vs", name="speed of sound", value=343, unit="m/s")',
+    ),
+    "quantity_kind": (
+        ("name", "dimension"),
+        'define(kind="quantity_kind", name="entropy_change", dimension="energy/temperature")',
+    ),
+    "basis": (
+        ("name",),
+        'define(kind="basis", name="thermodynamic", additional_components=[{"name": "thermal", "symbol": "Φ", "description": "Thermal marker"}])',
+    ),
+}
+
+
+@mcp.tool()
+@_dispatched_tool("define")
+def define(
+    kind: Literal["unit", "conversion", "constant", "quantity_kind", "basis"],
+    name: str | None = None,
+    dimension: str | None = None,
+    aliases: list[str] | None = None,
+    scalable: bool = True,
+    src: str | None = None,
+    dst: str | None = None,
+    factor: float | None = None,
+    offset: float = 0.0,
+    symbol: str | None = None,
+    value: float | None = None,
+    unit: str | None = None,
+    uncertainty: float | None = None,
+    source: str = "user-defined",
+    description: str = "",
+    category: str = "session",
+    disambiguation_hints: list[str] | None = None,
+    parent: str | None = None,
+    join_policy: str = "lca",
+    base: str = "SI",
+    additional_components: list[dict] | None = None,
+    ctx: Context | None = None,
+) -> (
+    UnitDefinitionResult
+    | ConversionDefinitionResult
+    | ConstantDefinitionResult
+    | QuantityKindDefinitionResult
+    | ExtendedBasisResult
+    | ConversionError
+    | ConstantError
+    | KOQError
+    | DefineError
+):
+    """
+    Define a session-scoped entity: a unit, a conversion edge, a constant,
+    a quantity kind, or an extended dimensional basis. Consolidates the
+    deprecated define_unit / define_conversion / define_constant /
+    define_quantity_kind / extend_basis tools behind one kind-keyed surface.
+
+    Required parameters by kind:
+    - unit: name, dimension (optional: aliases, scalable)
+    - conversion: src, dst, factor (optional: offset)
+    - constant: symbol, name, value, unit (optional: uncertainty, source)
+    - quantity_kind: name, dimension (optional: description, aliases,
+      category, disambiguation_hints, parent, join_policy)
+    - basis: name (optional: base, additional_components)
+
+    Definitions persist until reset_session().
+
+    Returns:
+        The same result and error models as the corresponding legacy tool
+        (UnitDefinitionResult, ConversionDefinitionResult,
+        ConstantDefinitionResult, QuantityKindDefinitionResult,
+        ExtendedBasisResult, and their typed errors). DefineError for an
+        unknown kind or missing required parameters.
+
+    Example:
+        define(kind="unit", name="slug", dimension="mass", aliases=["slug"])
+        define(kind="conversion", src="slug", dst="kg", factor=14.5939)
+    """
+    if kind not in _DEFINE_KINDS:
+        return DefineError(
+            error=f"Unknown kind: '{kind}'",
+            error_type="unknown_kind",
+            kind=kind,
+            likely_fix=f"Valid kinds: {', '.join(sorted(_DEFINE_KINDS))}",
+        )
+
+    supplied = {
+        "name": name,
+        "dimension": dimension,
+        "src": src,
+        "dst": dst,
+        "factor": factor,
+        "symbol": symbol,
+        "value": value,
+        "unit": unit,
+    }
+    required, example = _DEFINE_KINDS[kind]
+    missing = [p for p in required if supplied[p] is None]
+    if missing:
+        return DefineError(
+            error=f"Missing required parameter(s) for kind '{kind}': {', '.join(missing)}",
+            error_type="missing_parameter",
+            kind=kind,
+            likely_fix=f"Example: {example}",
+        )
+
+    # Transitional delegation: the legacy tools stay registered through
+    # v0.9.x; their bodies move here when they are removed in v1.0.0.
+    if kind == "unit":
+        return define_unit(
+            name=name, dimension=dimension, aliases=aliases,
+            scalable=scalable, ctx=ctx,
+        )
+    if kind == "conversion":
+        return define_conversion(
+            src=src, dst=dst, factor=factor, offset=offset, ctx=ctx,
+        )
+    if kind == "constant":
+        return define_constant(
+            symbol=symbol, name=name, value=value, unit=unit,
+            uncertainty=uncertainty, source=source, ctx=ctx,
+        )
+    if kind == "quantity_kind":
+        return define_quantity_kind(
+            name=name, dimension=dimension, description=description,
+            aliases=aliases, category=category,
+            disambiguation_hints=disambiguation_hints, parent=parent,
+            join_policy=join_policy, ctx=ctx,
+        )
+    return extend_basis(
+        name=name, base=base, additional_components=additional_components,
+        ctx=ctx,
+    )
+
+
 @mcp.tool()
 @_dispatched_tool("reset_session")
 def reset_session(ctx: Context | None = None) -> SessionResult:
@@ -1841,6 +2001,8 @@ def restrict_system(
     ctx: Context | None = None,
 ) -> dict:
     """
+    Deprecated: use system(action="restrict"). Scheduled for removal in v1.0.0.
+
     Restrict active system to named units/dimensions.
 
     Returns a summary of the restricted system: the surviving dimensions,
@@ -1884,6 +2046,8 @@ def diff_systems(
     ctx: Context | None = None,
 ) -> dict:
     """
+    Deprecated: use system(action="diff"). Scheduled for removal in v1.0.0.
+
     Compare the session system against the process-base system.
 
     Shows units, dimensions, and conversions added, removed, or
@@ -1923,6 +2087,8 @@ def check_compatibility(
     ctx: Context | None = None,
 ) -> dict:
     """
+    Deprecated: use system(action="check_compatibility"). Scheduled for removal in v1.0.0.
+
     Check if the session system composes with the process-base without conflict.
 
     Returns compatibility status and, when incompatible, a summary of
@@ -1954,6 +2120,57 @@ def check_compatibility(
             )
         result["conflicts"] = conflicts
     return result
+
+
+_SYSTEM_ACTIONS = ("restrict", "diff", "check_compatibility")
+
+
+@mcp.tool()
+@_dispatched_tool("system")
+def system(
+    action: Literal["restrict", "diff", "check_compatibility"],
+    dimensions: list[str] | None = None,
+    units: list[str] | None = None,
+    ctx: Context | None = None,
+) -> dict:
+    """
+    Inspect or restrict the active unit system. Consolidates the deprecated
+    restrict_system / diff_systems / check_compatibility tools behind one
+    action-keyed surface.
+
+    Actions:
+    - restrict: keep only the named dimensions/units (args: dimensions, units)
+    - diff: compare the session system against the process base
+    - check_compatibility: check whether the session system composes with
+      the process base without conflict
+
+    Args:
+        action: What to do. Required.
+        dimensions: Optional dimension names to keep (action: restrict).
+        units: Optional unit names to keep (action: restrict).
+
+    Returns:
+        dict — the same payload as the corresponding legacy tool;
+        {"error", "error_type", "likely_fix"} for an unknown action.
+
+    Example:
+        system(action="restrict", dimensions=["length", "time"])
+        system(action="diff")
+    """
+    if action not in _SYSTEM_ACTIONS:
+        return {
+            "error": f"Unknown action: '{action}'",
+            "error_type": "unknown_action",
+            "likely_fix": f"Valid actions: {', '.join(_SYSTEM_ACTIONS)}",
+        }
+
+    # Transitional delegation: the legacy tools stay registered through
+    # v0.9.x; their bodies move here when they are removed in v1.0.0.
+    if action == "restrict":
+        return restrict_system(dimensions=dimensions, units=units, ctx=ctx)
+    if action == "diff":
+        return diff_systems(ctx=ctx)
+    return check_compatibility(ctx=ctx)
 
 
 # -----------------------------------------------------------------------------
@@ -3555,6 +3772,8 @@ def define_quantity_kind(
     ctx: Context | None = None,
 ) -> QuantityKindDefinitionResult | KOQError:
     """
+    Deprecated: use define(kind="quantity_kind"). Scheduled for removal in v1.0.0.
+
     Register a quantity kind for KOQ disambiguation.
 
     Quantity kinds identify physically distinct quantities that share
@@ -4268,6 +4487,8 @@ def extend_basis(
     ctx: Context | None = None,
 ) -> ExtendedBasisResult | KOQError:
     """
+    Deprecated: use define(kind="basis"). Scheduled for removal in v1.0.0.
+
     Create an extended dimensional basis for KOQ disambiguation.
 
     Extended bases add semantic components to the standard SI basis,

@@ -1234,7 +1234,7 @@ class TestSessionTools(unittest.TestCase):
         self.assertEqual(result.parameter, "dimension")
 
     def test_define_unit_message_contains_capability_hint(self):
-        """Regression: define_unit message points caller at define_conversion().
+        """Regression: define_unit message points caller at define(kind="conversion").
 
         See docs/internal/CONVENTION_response-capability-hints.md.
         """
@@ -1244,7 +1244,7 @@ class TestSessionTools(unittest.TestCase):
             aliases=["smoot"],
         )
         self.assertIsInstance(result, self.UnitDefinitionResult)
-        self.assertIn("define_conversion()", result.message)
+        self.assertIn('define(kind="conversion")', result.message)
 
     def test_define_conversion_success(self):
         """Test defining a conversion edge successfully."""

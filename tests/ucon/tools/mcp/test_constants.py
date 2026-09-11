@@ -106,7 +106,7 @@ class TestDefineConstant:
         assert result.symbol == "test_vs"
 
     def test_define_message_contains_capability_hint(self):
-        """Regression: define_constant message points caller at list_constants/compute.
+        """Regression: define_constant message points caller at discover/compute.
 
         See docs/internal/CONVENTION_response-capability-hints.md.
         """
@@ -119,7 +119,7 @@ class TestDefineConstant:
             unit="m/s",
         )
         assert isinstance(result, ConstantDefinitionResult)
-        assert "list_constants()" in result.message
+        assert 'discover(topic="constants")' in result.message
         assert "compute()" in result.message
 
     def test_duplicate_builtin_symbol_fails(self):
