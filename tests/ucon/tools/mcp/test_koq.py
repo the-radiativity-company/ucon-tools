@@ -63,7 +63,7 @@ class TestDefineQuantityKind(unittest.TestCase):
         self.assertEqual(result.category, "thermodynamic")
 
     def test_define_message_contains_capability_hint(self):
-        """Regression: define_quantity_kind message points caller at declare_computation/validate_result.
+        """Regression: define_quantity_kind message points caller at validate_result.
 
         See docs/internal/CONVENTION_response-capability-hints.md.
         """
@@ -73,8 +73,7 @@ class TestDefineQuantityKind(unittest.TestCase):
             description="Test kind",
         )
         self.assertIsInstance(result, self.QuantityKindDefinitionResult)
-        self.assertIn("declare_computation()", result.message)
-        self.assertIn("validate_result()", result.message)
+        self.assertIn("validate_result(declared_kind=...)", result.message)
 
     def test_define_kind_with_vector_notation(self):
         """Test defining a kind using vector notation for dimension."""
@@ -670,6 +669,30 @@ class TestValidateResult(unittest.TestCase):
             value=2.5,
             unit="Sv",
             declared_kind="absorbed_dose",
+        )
+        self.assertIsInstance(result, self.ValidationResult)
+        self.assertFalse(result.passed)
+        self.assertTrue(result.dimension_match)
+        self.assertFalse(result.kind_match)
+        self.assertEqual(result.confidence, "high")
+
+    def test_validate_disjoint_kind_fails_cleanly(self):
+        """Regression (ucon 2.1.5): DisjointKinds is a verdict, not a crash.
+
+        A session-defined root kind sharing Sv's dimension has no common
+        ancestor with dose_equivalent, so lattice.join() raises
+        DisjointKinds. validate_result must return a failed
+        ValidationResult instead of propagating the exception.
+        """
+        self.define_quantity_kind(
+            name="weird_dose",
+            dimension="specific_energy",
+            description="Root kind disjoint from the dose tree",
+        )
+        result = self.validate_result(
+            value=1.0,
+            unit="Sv",
+            declared_kind="weird_dose",
         )
         self.assertIsInstance(result, self.ValidationResult)
         self.assertFalse(result.passed)

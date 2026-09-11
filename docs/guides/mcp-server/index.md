@@ -116,7 +116,24 @@ compute(
 
 Each step in the response shows intermediate quantity, unit, and dimension.
 
+### `discover`
+
+Unified discovery across topics: `units`, `scales`, `dimensions`,
+`constants`, `formulas`, `quantity_kinds`, `kind_formulas`,
+`extended_bases`. Supersedes the individual `list_*` tools.
+
+```python
+discover(topic="units", dimension="length")
+# → {"topic": "units", "count": 20, "filters": {"dimension": "length"},
+#    "items": [{"name": "angstrom", "shorthand": "Å", "dimension": "length", ...}, ...]}
+
+discover(topic="constants", category="exact")
+# → {"topic": "constants", "count": 8, ..., "items": [...]}
+```
+
 ### `list_units`
+
+*Deprecated — use `discover(topic="units")`. Removal in v1.0.0.*
 
 Discover available units, optionally filtered by dimension.
 
@@ -126,6 +143,8 @@ list_units(dimension="length")
 ```
 
 ### `list_scales`
+
+*Deprecated — use `discover(topic="scales")`. Removal in v1.0.0.*
 
 List SI and binary prefixes.
 
@@ -148,6 +167,8 @@ check_dimensions(unit_a="kg", unit_b="m")
 
 ### `list_dimensions`
 
+*Deprecated — use `discover(topic="dimensions")`. Removal in v1.0.0.*
+
 List available physical dimensions.
 
 ```python
@@ -155,7 +176,26 @@ list_dimensions()
 # → ["acceleration", "area", "energy", "force", "length", "mass", ...]
 ```
 
+### `define`
+
+Unified session definition: units, conversion edges, constants, quantity
+kinds, and extended bases. Supersedes the individual `define_*` and
+`extend_basis` tools.
+
+```python
+define(kind="unit", name="slug", dimension="mass", aliases=["slug"])
+# → {"success": true, "message": "Unit 'slug' registered..."}
+
+define(kind="conversion", src="slug", dst="kg", factor=14.5939)
+# → {"success": true, "message": "Conversion edge 'slug' → 'kg' added..."}
+
+define(kind="constant", symbol="vₛ", name="speed of sound", value=343, unit="m/s")
+# → {"success": true, "symbol": "vₛ", ...}
+```
+
 ### `define_unit`
+
+*Deprecated — use `define(kind="unit")`. Removal in v1.0.0.*
 
 Register a custom unit for the session.
 
@@ -166,6 +206,8 @@ define_unit(name="slug", dimension="mass", aliases=["slug"])
 
 ### `define_conversion`
 
+*Deprecated — use `define(kind="conversion")`. Removal in v1.0.0.*
+
 Add a conversion edge between units.
 
 ```python
@@ -175,6 +217,8 @@ define_conversion(src="slug", dst="kg", factor=14.5939)
 
 ### `list_constants`
 
+*Deprecated — use `discover(topic="constants")`. Removal in v1.0.0.*
+
 List available physical constants, optionally filtered by category.
 
 ```python
@@ -182,15 +226,17 @@ list_constants()
 # → [{"symbol": "c", "name": "speed of light in vacuum", "value": 299792458, ...}, ...]
 
 list_constants(category="exact")
-# → [7 SI defining constants]
+# → [8 SI defining constants]
 
 list_constants(category="session")
 # → [user-defined constants]
 ```
 
-Categories: `"exact"` (7), `"derived"` (3), `"measured"` (7), `"session"` (user-defined).
+Categories: `"exact"` (8), `"derived"` (3), `"measured"` (15), `"session"` (user-defined).
 
 ### `define_constant`
+
+*Deprecated — use `define(kind="constant")`. Removal in v1.0.0.*
 
 Register a custom constant for the session.
 
@@ -213,7 +259,27 @@ reset_session()
 # → {"success": true, "message": "Session reset..."}
 ```
 
+### `system`
+
+Unified system operations: restrict the active system, diff it against the
+process base, or check compatibility. Supersedes `restrict_system`,
+`diff_systems`, and `check_compatibility` (all deprecated, removal in
+v1.0.0).
+
+```python
+system(action="restrict", dimensions=["length", "time"])
+# → {"success": true, "dimensions": ["length", "time"], "unit_count": ...}
+
+system(action="diff")
+# → {"success": true, "units": {"added": 0, "removed": 0, "redefined": 0}, ...}
+
+system(action="check_compatibility")
+# → {"compatible": true}
+```
+
 ### `define_quantity_kind`
+
+*Deprecated — use `define(kind="quantity_kind")`. Removal in v1.0.0.*
 
 Register a quantity kind for semantic disambiguation.
 
@@ -242,6 +308,8 @@ define_quantity_kind(
 ```
 
 ### `declare_computation`
+
+*Deprecated — use `validate_result(declared_kind=...)`. Removal in v1.0.0.*
 
 Declare computational intent before performing a calculation.
 
@@ -289,6 +357,8 @@ The result's kind is resolved from unit conventions (Sv → `dose_equivalent`, G
 
 ### `list_quantity_kinds`
 
+*Deprecated — use `discover(topic="quantity_kinds")`. Removal in v1.0.0.*
+
 List built-in and session-defined quantity kinds, optionally filtered by dimension or category.
 
 ```python
@@ -302,6 +372,8 @@ list_quantity_kinds(category="builtin")
 
 ### `list_kind_formulas`
 
+*Deprecated — use `discover(topic="kind_formulas")`. Removal in v1.0.0.*
+
 List kind-arithmetic rules from the FormulaRegistry — the formulas that let kinded quantities combine (e.g., ICRP 103's `H = D · w_R`).
 
 ```python
@@ -312,6 +384,8 @@ list_kind_formulas()
 ```
 
 ### `list_formulas`
+
+*Deprecated — use `discover(topic="formulas")`. Removal in v1.0.0.*
 
 List registered domain formulas with dimensional constraints.
 

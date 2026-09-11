@@ -73,14 +73,18 @@ class StaticCatalog:
 # -----------------------------------------------------------------------------
 
 # The read-only tool roster shipped in the core bundle. Mutating tools
-# (`define_unit`, `define_conversion`, `define_constant`,
-# `define_quantity_kind`, `extend_basis`, `reset_session`) are
-# deliberately excluded; future split-per-concern bundles will host
-# them once their composition story is settled.
+# (the consolidated `define` and its deprecated constituents
+# `define_unit`, `define_conversion`, `define_constant`,
+# `define_quantity_kind`, `extend_basis`, plus `reset_session`) are
+# deliberately excluded; a mutation-capable bundle will host them when
+# capability gating is switched on. `system` consolidates
+# `restrict_system` (core) with `diff_systems`/`check_compatibility`
+# (pro); under all-or-nothing gating the merged tool rides in core.
 _CORE_TOOLS: frozenset[str] = frozenset({
     "convert",
     "compute",
     "decompose",
+    "discover",
     "list_units",
     "list_scales",
     "list_dimensions",
@@ -94,6 +98,7 @@ _CORE_TOOLS: frozenset[str] = frozenset({
     "list_formulas",
     "call_formula",
     "restrict_system",
+    "system",
 })
 
 
