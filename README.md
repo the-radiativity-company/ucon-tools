@@ -99,15 +99,14 @@ ucon-mcp --transport sse    # SSE transport for remote clients
 | `list_constants` | *Deprecated — use `discover(topic="constants")`.* List physical constants (CODATA 2022) |
 | `list_formulas` | *Deprecated — use `discover(topic="formulas")`.* List registered domain formulas |
 
-The `list_*` tools remain functional through v0.9.x and are scheduled for removal in v1.0.0.
-
 **Runtime extension** — add units and conversions per session:
 
 | Tool | Description |
 |------|-------------|
-| `define_unit` | Register a custom unit for the session |
-| `define_conversion` | Add a conversion edge (linear or affine) |
-| `define_constant` | Define a custom physical constant |
+| `define` | Unified session definition: units, conversion edges, constants, quantity kinds, extended bases (`kind="unit"` \| `"conversion"` \| `"constant"` \| `"quantity_kind"` \| `"basis"`) |
+| `define_unit` | *Deprecated — use `define(kind="unit")`.* Register a custom unit for the session |
+| `define_conversion` | *Deprecated — use `define(kind="conversion")`.* Add a conversion edge (linear or affine) |
+| `define_constant` | *Deprecated — use `define(kind="constant")`.* Define a custom physical constant |
 | `call_formula` | Call a registered dimensionally-typed formula |
 | `reset_session` | Clear all session-defined units, conversions, and constants |
 
@@ -115,21 +114,24 @@ The `list_*` tools remain functional through v0.9.x and are scheduled for remova
 
 | Tool | Description |
 |------|-------------|
-| `define_quantity_kind` | Register a quantity kind, optionally placed in the kind hierarchy |
+| `define_quantity_kind` | *Deprecated — use `define(kind="quantity_kind")`.* Register a quantity kind, optionally placed in the kind hierarchy |
 | `declare_computation` | *Deprecated — use `validate_result(declared_kind=...)`.* Declare expected quantity kind before computing |
 | `validate_result` | Validate that a result matches the declared kind (dimension *and* kind) |
 | `list_quantity_kinds` | *Deprecated — use `discover(topic="quantity_kinds")`.* List built-in and session-defined quantity kinds |
 | `list_kind_formulas` | *Deprecated — use `discover(topic="kind_formulas")`.* List kind-arithmetic rules from the FormulaRegistry |
-| `extend_basis` | Create an extended dimensional basis |
+| `extend_basis` | *Deprecated — use `define(kind="basis")`.* Create an extended dimensional basis |
 | `list_extended_bases` | *Deprecated — use `discover(topic="extended_bases")`.* List session-defined extended bases |
 
 **Unit systems** — inspect and scope the active system:
 
 | Tool | Description |
 |------|-------------|
-| `restrict_system` | Restrict the active system to named units/dimensions |
-| `diff_systems` | Compare the session system against the process-base system |
-| `check_compatibility` | Check if the session system composes with the process-base without conflict |
+| `system` | Unified system operations: restrict, diff, compatibility check (`action="restrict"` \| `"diff"` \| `"check_compatibility"`) |
+| `restrict_system` | *Deprecated — use `system(action="restrict")`.* Restrict the active system to named units/dimensions |
+| `diff_systems` | *Deprecated — use `system(action="diff")`.* Compare the session system against the process-base system |
+| `check_compatibility` | *Deprecated — use `system(action="check_compatibility")`.* Check if the session system composes with the process-base without conflict |
+
+All deprecated tools remain functional through v0.9.x and are scheduled for removal in v1.0.0, leaving a ten-tool surface: `convert`, `compute`, `decompose`, `check_dimensions`, `discover`, `define`, `system`, `call_formula`, `validate_result`, `reset_session`.
 
 ---
 

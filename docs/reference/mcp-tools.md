@@ -332,6 +332,111 @@ discover(topic="quantity_kinds", include_builtin=False)
 
 ---
 
+## define
+
+Define a session-scoped entity: a unit, a conversion edge, a constant, a
+quantity kind, or an extended dimensional basis. Consolidates the deprecated
+`define_unit` / `define_conversion` / `define_constant` /
+`define_quantity_kind` / `extend_basis` tools behind one kind-keyed surface.
+Definitions persist until `reset_session()`.
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `kind` | `"unit"` \| `"conversion"` \| `"constant"` \| `"quantity_kind"` \| `"basis"` | Yes | What to define |
+| `name` | string | kinds: unit, constant, quantity_kind, basis | Entity name (constant: full descriptive name) |
+| `dimension` | string | kinds: unit, quantity_kind | Dimension name or expression |
+| `aliases` | list[string] | No | Alternative names (kinds: unit, quantity_kind) |
+| `scalable` | boolean | No | Whether SI prefixes attach (kind: unit; default `true`) |
+| `src`, `dst` | string | kind: conversion | Source/destination unit names |
+| `factor` | number | kind: conversion | Multiplier: `dst = src × factor + offset` |
+| `offset` | number | No | Affine offset (kind: conversion; default `0.0`) |
+| `symbol` | string | kind: constant | Short symbol (e.g., `"vₛ"`) |
+| `value` | number | kind: constant | Numeric value in the given unit |
+| `unit` | string | kind: constant | Unit string (e.g., `"m/s"`) |
+| `uncertainty` | number | No | Standard uncertainty (kind: constant) |
+| `source` | string | No | Data source reference (kind: constant) |
+| `description` | string | No | Human-readable description (kind: quantity_kind) |
+| `category` | string | No | Classification (kind: quantity_kind; default `"session"`) |
+| `disambiguation_hints` | list[string] | No | Distinguishing tips (kind: quantity_kind) |
+| `parent` | string | No | Parent kind in the hierarchy (kind: quantity_kind) |
+| `join_policy` | `"lca"` \| `"refuse"` | No | Join behavior (kind: quantity_kind; default `"lca"`) |
+| `base` | string | No | Starting basis (kind: basis; default `"SI"`) |
+| `additional_components` | list[object] | No | New basis components with `name`/`symbol`/`description` (kind: basis) |
+
+### Returns
+
+The same result and error models as the corresponding legacy tool
+(`UnitDefinitionResult`, `ConversionDefinitionResult`,
+`ConstantDefinitionResult`, `QuantityKindDefinitionResult`,
+`ExtendedBasisResult`, and their typed errors). A `DefineError` for an
+unknown kind or missing required parameters:
+
+```json
+{
+  "error": "Missing required parameter(s) for kind 'conversion': factor",
+  "error_type": "missing_parameter",
+  "kind": "conversion",
+  "likely_fix": "Example: define(kind=\"conversion\", src=\"slug\", dst=\"kg\", factor=14.5939)"
+}
+```
+
+### Examples
+
+```python
+define(kind="unit", name="slug", dimension="mass", aliases=["slug"])
+define(kind="conversion", src="slug", dst="kg", factor=14.5939)
+define(kind="constant", symbol="vₛ", name="speed of sound", value=343, unit="m/s")
+define(kind="quantity_kind", name="entropy_change", dimension="energy/temperature")
+define(kind="basis", name="thermodynamic",
+       additional_components=[{"name": "thermal", "symbol": "Φ", "description": "Thermal marker"}])
+```
+
+---
+
+## system
+
+Inspect or restrict the active unit system. Consolidates the deprecated
+`restrict_system` / `diff_systems` / `check_compatibility` tools behind one
+action-keyed surface.
+
+### Parameters
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `action` | `"restrict"` \| `"diff"` \| `"check_compatibility"` | Yes | What to do |
+| `dimensions` | list[string] | No | Dimension names to keep (action: restrict) |
+| `units` | list[string] | No | Unit names to keep (action: restrict) |
+
+### Returns
+
+The same dict payload as the corresponding legacy tool. An error dict for an
+unknown action:
+
+```json
+{
+  "error": "Unknown action: 'explode'",
+  "error_type": "unknown_action",
+  "likely_fix": "Valid actions: restrict, diff, check_compatibility"
+}
+```
+
+### Examples
+
+```python
+system(action="restrict", dimensions=["length", "time"])
+# → {"success": true, "dimensions": ["length", "time"], "unit_count": ..., ...}
+
+system(action="diff")
+# → {"success": true, "units": {"added": 0, ...}, "dimensions": {...}, ...}
+
+system(action="check_compatibility")
+# → {"compatible": true}
+```
+
+---
+
 ## list_units
 
 **Deprecated:** use `discover(topic="units")`. Scheduled for removal in v1.0.0.
@@ -480,6 +585,8 @@ check_dimensions(unit_a="kg", unit_b="m")
 
 ## define_unit
 
+**Deprecated:** use `define(kind="unit")`. Scheduled for removal in v1.0.0.
+
 Register a custom unit for the session.
 
 ### Parameters
@@ -514,6 +621,8 @@ define_unit(name="nautical_mile", dimension="length", aliases=["nmi", "NM"])
 ---
 
 ## define_conversion
+
+**Deprecated:** use `define(kind="conversion")`. Scheduled for removal in v1.0.0.
 
 Add a conversion edge between units.
 
@@ -633,6 +742,8 @@ list_constants(category="session")
 ---
 
 ## define_constant
+
+**Deprecated:** use `define(kind="constant")`. Scheduled for removal in v1.0.0.
 
 Define a custom constant for the current session.
 
@@ -921,6 +1032,8 @@ For background, see [Kind-of-Quantity](https://docs.ucon.dev/architecture/kind-o
 ---
 
 ## define_quantity_kind
+
+**Deprecated:** use `define(kind="quantity_kind")`. Scheduled for removal in v1.0.0.
 
 Register a quantity kind for semantic disambiguation.
 

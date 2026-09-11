@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Tool-surface consolidation (phase 1 of 2): the discovery surface
-collapses behind a single `discover` tool, and superseded tools are
-deprecated in place. Removal lands in v1.0.0.
+Tool-surface consolidation (phase 1 of 2): discovery collapses behind
+`discover`, session definition behind `define`, and system operations
+behind `system`; superseded tools are deprecated in place. Removal
+lands in v1.0.0, leaving a ten-tool surface: `convert`, `compute`,
+`decompose`, `check_dimensions`, `discover`, `define`, `system`,
+`call_formula`, `validate_result`, `reset_session`.
 
 ### Added
 
@@ -21,6 +24,18 @@ deprecated in place. Removal lands in v1.0.0.
   do not apply to a topic are rejected with a typed `invalid_filter`
   error instead of being silently ignored. Included in the `core`
   capability bundle.
+- **`define` tool.** Unified session definition behind a required
+  `kind` parameter (`unit`, `conversion`, `constant`, `quantity_kind`,
+  `basis`). Delegates to the legacy tool bodies and returns their
+  result and error models unchanged; unknown kinds and missing
+  required parameters fail with a typed `DefineError` carrying a
+  corrective example. Excluded from the `core` bundle alongside the
+  other mutating tools.
+- **`system` tool.** Unified system operations behind a required
+  `action` parameter (`restrict`, `diff`, `check_compatibility`).
+  Returns the same dict payloads as the legacy tools; unknown actions
+  fail with a typed error dict. Included in the `core` capability
+  bundle.
 
 ### Deprecated
 
@@ -34,6 +49,15 @@ deprecated in place. Removal lands in v1.0.0.
   `validate_result(declared_kind=...)`, which performs the same kind
   check without a separate declaration step. Functional through
   v0.9.x; scheduled for removal in v1.0.0.
+- **The five definition tools.** `define_unit`, `define_conversion`,
+  `define_constant`, `define_quantity_kind`, and `extend_basis` are
+  superseded by `define(kind=...)`. Success messages that steered to
+  deprecated tools now point at the consolidated surface
+  (`define(kind="conversion")`, `discover(topic="constants")`).
+  Functional through v0.9.x; scheduled for removal in v1.0.0.
+- **The three system tools.** `restrict_system`, `diff_systems`, and
+  `check_compatibility` are superseded by `system(action=...)`.
+  Functional through v0.9.x; scheduled for removal in v1.0.0.
 
 ### Changed
 

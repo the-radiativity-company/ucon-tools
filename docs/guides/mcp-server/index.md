@@ -176,7 +176,26 @@ list_dimensions()
 # → ["acceleration", "area", "energy", "force", "length", "mass", ...]
 ```
 
+### `define`
+
+Unified session definition: units, conversion edges, constants, quantity
+kinds, and extended bases. Supersedes the individual `define_*` and
+`extend_basis` tools.
+
+```python
+define(kind="unit", name="slug", dimension="mass", aliases=["slug"])
+# → {"success": true, "message": "Unit 'slug' registered..."}
+
+define(kind="conversion", src="slug", dst="kg", factor=14.5939)
+# → {"success": true, "message": "Conversion edge 'slug' → 'kg' added..."}
+
+define(kind="constant", symbol="vₛ", name="speed of sound", value=343, unit="m/s")
+# → {"success": true, "symbol": "vₛ", ...}
+```
+
 ### `define_unit`
+
+*Deprecated — use `define(kind="unit")`. Removal in v1.0.0.*
 
 Register a custom unit for the session.
 
@@ -186,6 +205,8 @@ define_unit(name="slug", dimension="mass", aliases=["slug"])
 ```
 
 ### `define_conversion`
+
+*Deprecated — use `define(kind="conversion")`. Removal in v1.0.0.*
 
 Add a conversion edge between units.
 
@@ -215,6 +236,8 @@ Categories: `"exact"` (8), `"derived"` (3), `"measured"` (15), `"session"` (user
 
 ### `define_constant`
 
+*Deprecated — use `define(kind="constant")`. Removal in v1.0.0.*
+
 Register a custom constant for the session.
 
 ```python
@@ -236,7 +259,27 @@ reset_session()
 # → {"success": true, "message": "Session reset..."}
 ```
 
+### `system`
+
+Unified system operations: restrict the active system, diff it against the
+process base, or check compatibility. Supersedes `restrict_system`,
+`diff_systems`, and `check_compatibility` (all deprecated, removal in
+v1.0.0).
+
+```python
+system(action="restrict", dimensions=["length", "time"])
+# → {"success": true, "dimensions": ["length", "time"], "unit_count": ...}
+
+system(action="diff")
+# → {"success": true, "units": {"added": 0, "removed": 0, "redefined": 0}, ...}
+
+system(action="check_compatibility")
+# → {"compatible": true}
+```
+
 ### `define_quantity_kind`
+
+*Deprecated — use `define(kind="quantity_kind")`. Removal in v1.0.0.*
 
 Register a quantity kind for semantic disambiguation.
 
