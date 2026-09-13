@@ -24,7 +24,15 @@ from ucon.basis.transforms import BasisTransform
 from ucon import KindMismatch
 from ucon.formulas.exceptions import FormulaNotFound
 from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_conversion_graph  # noqa: F401 – using_conversion_graph used only for inline-graph overrides (custom_units/custom_edges)
+from ucon.aspects import (
+    Aspect,
+    AspectError,
+    AspectNotApplicable,
+    AspectRefused,
+    MultPolicy,
+)
 from ucon.kinds import DisjointKinds, JoinPolicy, JoinRefused, Kind, KindNotFound, NameCollision
+from ucon.parsing.namespaces import rewrite_namespace
 from ucon.system import UnitSystem, use as use_system, active_system
 from ucon.maps import LinearMap
 from ucon.tools.mcp.formulas import list_formulas as _list_formulas, get_formula
@@ -536,6 +544,39 @@ class UnitDefinitionResult(BaseModel):
     aliases: list[str]
     scalable: bool
     message: str
+
+
+class AspectDefinitionResult(BaseModel):
+    """Result of defining a session aspect."""
+
+    success: bool
+    name: str
+    family: str
+    parent: str | None
+    join_policy: str
+    applies_to: list[str]
+    multiplication_policy: str
+    message: str
+
+
+class AspectToolError(BaseModel):
+    """Typed error from aspect operations.
+
+    ``aspect_error`` covers structural failures (duplicate names,
+    orphan parents, root-only fields on children); ``aspect_refused``
+    carries the warrant payload (family, left, right, policy — a null
+    side marks partial presence); ``aspect_not_applicable`` marks an
+    attachment violation (family, kind).
+    """
+
+    error: str
+    error_type: str  # "aspect_error" | "aspect_refused" | "aspect_not_applicable"
+    family: str | None = None
+    left: str | None = None
+    right: str | None = None
+    policy: str | None = None
+    kind: str | None = None
+    likely_fix: str = ""
 
 
 class ConversionDefinitionResult(BaseModel):
@@ -1843,13 +1884,115 @@ _DEFINE_KINDS: dict[str, tuple[tuple[str, ...], str]] = {
         ("name",),
         'define(kind="basis", name="thermodynamic", additional_components=[{"name": "thermal", "symbol": "Φ", "description": "Thermal marker"}])',
     ),
+    "aspect": (
+        ("name",),
+        'define(kind="aspect", name="icrp103", parent="weighting_standard")',
+    ),
 }
+
+
+def _define_aspect_body(
+    name: str,
+    parent: str | None,
+    join_policy: str,
+    applies_to: list[str] | None,
+    multiplication_policy: str,
+    namespace: str | None,
+    ctx: Context | None,
+) -> AspectDefinitionResult | AspectToolError:
+    """Define a session aspect (family root or child position).
+
+    No legacy constituent exists — aspects arrive with ucon 2.2.0 and
+    land only on the consolidated surface. With ``namespace``, the
+    declaration is qualified per D3 through ucon's ``rewrite_namespace``
+    (name, parent, and ``applies_to`` kind references; ``@name`` escapes
+    to root; explicit ``pkg:name`` spellings pass through).
+    """
+    session = _get_session(ctx)
+
+    entry: dict = {"name": name}
+    if parent is not None:
+        entry["parent"] = parent
+    if applies_to:
+        entry["applies_to"] = list(applies_to)
+    if namespace:
+        payload = rewrite_namespace(
+            {"package": {"namespace": namespace}, "aspects": [entry]}
+        )
+        entry = payload["aspects"][0]
+
+    try:
+        jp = JoinPolicy(join_policy)
+    except ValueError:
+        return AspectToolError(
+            error=f"Unrecognized join_policy: '{join_policy}'",
+            error_type="aspect_error",
+            likely_fix=f"Valid policies: {', '.join(p.value for p in JoinPolicy)}",
+        )
+    try:
+        mp = MultPolicy(multiplication_policy)
+    except ValueError:
+        return AspectToolError(
+            error=f"Unrecognized multiplication_policy: '{multiplication_policy}'",
+            error_type="aspect_error",
+            likely_fix=f"Valid policies: {', '.join(p.value for p in MultPolicy)}",
+        )
+
+    parent_aspect: Aspect | None = None
+    parent_name = entry.get("parent")
+    if parent_name is not None:
+        try:
+            parent_aspect = session.get_aspect_forest().get(parent_name)
+        except AspectError as exc:
+            return AspectToolError(
+                error=str(exc),
+                error_type="aspect_error",
+                likely_fix=(
+                    f"Declare the family root first: "
+                    f'define(kind="aspect", name="{parent_name}")'
+                ),
+            )
+
+    aspect = Aspect(
+        name=entry["name"],
+        parent=parent_aspect,
+        join_policy=jp,
+        applies_to=frozenset(entry.get("applies_to", ())),
+        multiplication_policy=mp,
+    )
+    try:
+        session.register_aspect(aspect)
+    except AspectError as exc:
+        return AspectToolError(
+            error=str(exc),
+            error_type="aspect_error",
+            likely_fix=(
+                "Root-only fields (applies_to, multiplication_policy) "
+                "belong on the family root; names must be unique across "
+                "the forest — qualify with a namespace to avoid collisions."
+            ),
+        )
+
+    return AspectDefinitionResult(
+        success=True,
+        name=aspect.name,
+        family=aspect.root.name,
+        parent=parent_aspect.name if parent_aspect is not None else None,
+        join_policy=jp.value,
+        applies_to=sorted(aspect.applies_to),
+        multiplication_policy=mp.value,
+        message=(
+            f"Aspect '{aspect.name}' registered for session under family "
+            f"'{aspect.root.name}'. Attach with convert(..., aspects=[...]) "
+            f"or discover with discover(topic=\"aspects\")."
+        ),
+    )
 
 
 @mcp.tool()
 @_dispatched_tool("define")
 def define(
-    kind: Literal["unit", "conversion", "constant", "quantity_kind", "basis"],
+    kind: Literal["unit", "conversion", "constant", "quantity_kind", "basis", "aspect"],
     name: str | None = None,
     dimension: str | None = None,
     aliases: list[str] | None = None,
@@ -1867,9 +2010,12 @@ def define(
     category: str = "session",
     disambiguation_hints: list[str] | None = None,
     parent: str | None = None,
-    join_policy: str = "lca",
+    join_policy: str | None = None,
     base: str = "SI",
     additional_components: list[dict] | None = None,
+    applies_to: list[str] | None = None,
+    multiplication_policy: str = "carry",
+    namespace: str | None = None,
     ctx: Context | None = None,
 ) -> (
     UnitDefinitionResult
@@ -1877,9 +2023,11 @@ def define(
     | ConstantDefinitionResult
     | QuantityKindDefinitionResult
     | ExtendedBasisResult
+    | AspectDefinitionResult
     | ConversionError
     | ConstantError
     | KOQError
+    | AspectToolError
     | DefineError
 ):
     """
@@ -1895,6 +2043,12 @@ def define(
     - quantity_kind: name, dimension (optional: description, aliases,
       category, disambiguation_hints, parent, join_policy)
     - basis: name (optional: base, additional_components)
+    - aspect: name (optional: parent, join_policy — default "refuse",
+      applies_to and multiplication_policy on family roots only,
+      namespace for pkg:name qualification)
+
+    ``join_policy`` defaults per kind: "lca" for quantity_kind, "refuse"
+    for aspect.
 
     Definitions persist until reset_session().
 
@@ -1958,7 +2112,16 @@ def define(
             name=name, dimension=dimension, description=description,
             aliases=aliases, category=category,
             disambiguation_hints=disambiguation_hints, parent=parent,
-            join_policy=join_policy, ctx=ctx,
+            join_policy=join_policy if join_policy is not None else "lca",
+            ctx=ctx,
+        )
+    if kind == "aspect":
+        return _define_aspect_body(
+            name=name, parent=parent,
+            join_policy=join_policy if join_policy is not None else "refuse",
+            applies_to=applies_to,
+            multiplication_policy=multiplication_policy,
+            namespace=namespace, ctx=ctx,
         )
     return extend_basis(
         name=name, base=base, additional_components=additional_components,
@@ -4718,6 +4881,7 @@ _DISCOVER_TOPICS: dict[str, frozenset[str]] = {
     "quantity_kinds": frozenset({"dimension", "category", "include_builtin"}),
     "kind_formulas": frozenset(),
     "extended_bases": frozenset(),
+    "aspects": frozenset({"family"}),
 }
 
 
@@ -4733,10 +4897,12 @@ def discover(
         "quantity_kinds",
         "kind_formulas",
         "extended_bases",
+        "aspects",
     ],
     dimension: str | None = None,
     category: str | None = None,
     include_builtin: bool = True,
+    family: str | None = None,
     ctx: Context | None = None,
 ) -> DiscoverResult | DiscoverError | ConversionError | ConstantError | KOQError:
     """
@@ -4750,6 +4916,7 @@ def discover(
     - units: dimension (e.g., "length")
     - constants: category ("exact", "derived", "measured", "session", "all")
     - quantity_kinds: dimension, category, include_builtin
+    - aspects: family (a family-root name)
     - all other topics take no filters
 
     Args:
@@ -4784,6 +4951,7 @@ def discover(
         ("dimension", dimension, dimension is not None),
         ("category", category, category is not None),
         ("include_builtin", include_builtin, include_builtin is False),
+        ("family", family, family is not None),
     ):
         if not is_set:
             continue
@@ -4825,6 +4993,24 @@ def discover(
         items = kinds_found
     elif topic == "kind_formulas":
         items = _list_kind_formulas_body(ctx=ctx)
+    elif topic == "aspects":
+        forest = _get_session(ctx).get_aspect_forest()
+        items = sorted(
+            (
+                {
+                    "name": a.name,
+                    "family": a.root.name,
+                    "parent": a.parent.name if a.parent is not None else None,
+                    "join_policy": a.join_policy.value,
+                    "applies_to": sorted(a.applies_to),
+                    "multiplication_policy": a.multiplication_policy.value,
+                    "is_root": a.is_root,
+                }
+                for a in forest
+                if family is None or a.root.name == family
+            ),
+            key=lambda d: (d["family"], not d["is_root"], d["name"]),
+        )
     else:  # extended_bases
         items = _list_extended_bases_body(ctx=ctx)
 
