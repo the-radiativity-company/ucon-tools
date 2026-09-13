@@ -155,6 +155,9 @@ class ValidationResult(BaseModel):
     result_kind: str | None = None
     kind_match: bool | None = None
     kind_candidates: list[str] = []
+    declared_aspects: list[str] = []
+    result_aspects: list[str] = []
+    aspect_match: bool | None = None
     semantic_warnings: list[str] = []
     confidence: str  # "high", "medium", "low"
     explanation: str

@@ -18,6 +18,7 @@ Convert a numeric value from one unit to another.
 | `custom_units` | list[dict] | No | Inline unit definitions |
 | `custom_edges` | list[dict] | No | Inline conversion edges |
 | `kind` | string | No | Kind-of-quantity name to annotate the measurement (e.g. `"absorbed_dose"`). Must exist in the kind lattice and match the source unit's dimension; preserved through conversion and surfaced on the result |
+| `aspects` | list[string] | No | Aspect names to attach (declare with `define(kind="aspect")`). Thread through the conversion and surface on the result as `aspects`; a restricted family on a non-matching kind returns a typed `aspect_not_applicable` error |
 
 ### Response Schema
 
@@ -1434,6 +1435,81 @@ list_kind_formulas()
 | `invalid_join_policy` | `join_policy` is not `"lca"` or `"refuse"` |
 
 ---
+
+## Aspects (v0.10.0, ucon ≥ 2.2.0)
+
+Aspects qualify a quantity on terms its kind cannot express — the
+weighting standard behind a dose equivalent, the dry/wet basis of a
+mass fraction. Two values with the same dimension, unit, *and* kind may
+still refuse to combine, and the refusal carries a machine-readable
+warrant. There are no builtin aspects: sessions (or packages) declare
+their own vocabulary.
+
+### Declaring
+
+```python
+define(kind="aspect", name="weighting_standard", applies_to=["dose_equivalent"])
+define(kind="aspect", name="icrp103", parent="weighting_standard")
+define(kind="aspect", name="icrp60", parent="weighting_standard")
+
+# D3 namespace qualification (collision-proof vocabularies):
+define(kind="aspect", name="weighting_standard", namespace="radsafe")
+# → declares "radsafe:weighting_standard"
+```
+
+`join_policy` defaults to `"refuse"` for aspects (kinds default to
+`"lca"`). `applies_to` and `multiplication_policy` are root-only.
+
+### Discovering
+
+```python
+discover(topic="aspects")
+discover(topic="aspects", family="weighting_standard")
+# → items: [{"name", "family", "parent", "join_policy",
+#            "applies_to", "multiplication_policy", "is_root"}, ...]
+```
+
+### Threading
+
+```python
+convert(2.0, "Gy", "mGy", kind="absorbed_dose", aspects=["icrp103"])
+# → {..., "aspects": ["icrp103"]}   — carried through the conversion
+
+compute(
+    initial_value=2.0, initial_unit="mg/kg",
+    factors=[{"value": 70, "numerator": "kg", "denominator": "ea",
+              "aspects": ["icrp103"]}],
+)
+# → the factor's provenance rides the product (the carry rule)
+```
+
+Irreconcilable positions refuse with the warrant payload:
+
+```python
+compute(..., factors=[
+    {..., "aspects": ["icrp60"]},
+    {..., "aspects": ["icrp103"]},
+])
+# → {"error_type": "aspect_refused", "family": "weighting_standard",
+#    "left": "icrp60", "right": "icrp103", "policy": "refuse"}
+```
+
+### Validating
+
+```python
+validate_result(value=140.0, unit="mg", declared_kind="dose",
+                declared_aspects=["icrp103"], aspects=["icrp103"])
+# aspect_match: true — declared aspects are checked the way the
+# declared kind is; a mismatch fails validation with the delta named.
+```
+
+### Aspect Error Types
+
+| `error_type` | Meaning | Payload |
+|--------------|---------|---------|
+| `aspect_error` | Structural: unknown name, duplicate, orphan parent, root-only field on a child | `likely_fix` |
+| `aspect_refused` | Two positions cannot be reconciled | `family`, `left`, `right`, `policy` (a null side marks partial presence) |
+| `aspect_not_applicable` | Restricted family attached to a non-matching (or missing) kind | `family`, `kind` |
 
 ## KOQ Workflow
 

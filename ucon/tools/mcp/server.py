@@ -24,7 +24,16 @@ from ucon.basis.transforms import BasisTransform
 from ucon import KindMismatch
 from ucon.formulas.exceptions import FormulaNotFound
 from ucon.graph import ConversionGraph, DimensionMismatch, ConversionNotFound, using_conversion_graph  # noqa: F401 – using_conversion_graph used only for inline-graph overrides (custom_units/custom_edges)
+from ucon.aspects import (
+    Aspect,
+    AspectError,
+    AspectNotApplicable,
+    AspectRefused,
+    MultPolicy,
+    resolve_mul_aspects,
+)
 from ucon.kinds import DisjointKinds, JoinPolicy, JoinRefused, Kind, KindNotFound, NameCollision
+from ucon.parsing.namespaces import rewrite_namespace
 from ucon.system import UnitSystem, use as use_system, active_system
 from ucon.maps import LinearMap
 from ucon.tools.mcp.formulas import list_formulas as _list_formulas, get_formula
@@ -439,6 +448,7 @@ class ConversionResult(BaseModel):
     unit: str | None
     dimension: str
     kind: str | None = None
+    aspects: list[str] = []
     uncertainty: float | None = None
     source_scalable: bool | None = None
     target_scalable: bool | None = None
@@ -516,6 +526,7 @@ class ComputeResult(BaseModel):
     unit: str
     dimension: str
     steps: list[ComputeStep]
+    aspects: list[str] = []
     source_scalable: bool | None = None
     target_scalable: bool | None = None
 
@@ -536,6 +547,39 @@ class UnitDefinitionResult(BaseModel):
     aliases: list[str]
     scalable: bool
     message: str
+
+
+class AspectDefinitionResult(BaseModel):
+    """Result of defining a session aspect."""
+
+    success: bool
+    name: str
+    family: str
+    parent: str | None
+    join_policy: str
+    applies_to: list[str]
+    multiplication_policy: str
+    message: str
+
+
+class AspectToolError(BaseModel):
+    """Typed error from aspect operations.
+
+    ``aspect_error`` covers structural failures (duplicate names,
+    orphan parents, root-only fields on children); ``aspect_refused``
+    carries the warrant payload (family, left, right, policy — a null
+    side marks partial presence); ``aspect_not_applicable`` marks an
+    attachment violation (family, kind).
+    """
+
+    error: str
+    error_type: str  # "aspect_error" | "aspect_refused" | "aspect_not_applicable"
+    family: str | None = None
+    left: str | None = None
+    right: str | None = None
+    policy: str | None = None
+    kind: str | None = None
+    likely_fix: str = ""
 
 
 class ConversionDefinitionResult(BaseModel):
@@ -663,9 +707,10 @@ def convert(
     custom_units: list[dict] | None = None,
     custom_edges: list[dict] | None = None,
     kind: str | None = None,
+    aspects: list[str] | None = None,
     include_scalability: bool = False,
     ctx: Context | None = None,
-) -> ConversionResult | ConversionError:
+) -> ConversionResult | ConversionError | AspectToolError:
     """
     Convert a numeric value from one unit to another.
 
@@ -691,6 +736,12 @@ def convert(
             When provided, the Number is tagged with this kind and Number.to()
             preserves it through conversion. The kind must exist in the lattice
             and its dimension must match the source unit's dimension.
+        aspects: Optional aspect names to attach to the measurement
+            (declare with define(kind="aspect"); list with
+            discover(topic="aspects")). Aspects thread through the
+            conversion and are surfaced on the result. A restricted
+            family attached to a non-matching kind returns a typed
+            aspect_not_applicable error.
         include_scalability: When True, populate ``source_scalable`` and
             ``target_scalable`` on the result, reflecting the leaf-unit
             ``Unit.scalable`` flag. ``None`` for composite ``UnitProduct``
@@ -765,10 +816,43 @@ def convert(
                         ],
                     )
 
+            # 3b. Resolve aspect names against the session forest
+            resolved_aspects: list = []
+            if aspects:
+                forest = _get_session(ctx).get_aspect_forest()
+                for aspect_name in aspects:
+                    try:
+                        resolved_aspects.append(forest.get(aspect_name))
+                    except AspectError as exc:
+                        return AspectToolError(
+                            error=str(exc),
+                            error_type="aspect_error",
+                            likely_fix=(
+                                'Declare it first: define(kind="aspect", '
+                                f'name="{aspect_name}") — or discover '
+                                'existing ones with discover(topic="aspects").'
+                            ),
+                        )
+
             # 4. Perform conversion
             try:
-                num = Number(quantity=value, unit=src, kind=resolved_kind)
+                num = Number(
+                    quantity=value, unit=src, kind=resolved_kind,
+                    aspects=resolved_aspects,
+                )
                 result = num.to(dst, graph=graph)
+            except AspectNotApplicable as exc:
+                return AspectToolError(
+                    error=str(exc),
+                    error_type="aspect_not_applicable",
+                    family=exc.family.name,
+                    kind=exc.kind.name if exc.kind is not None else None,
+                    likely_fix=(
+                        "The family's applies_to restricts which kinds it "
+                        "may attach to; pass a matching kind= or use an "
+                        "unrestricted family."
+                    ),
+                )
             except DimensionMismatch:
                 return build_dimension_mismatch_error(from_unit, to_unit, src, dst)
             except ConversionNotFound as e:
@@ -792,6 +876,7 @@ def convert(
         unit=unit_str,
         dimension=dim_name,
         kind=result_kind,
+        aspects=sorted(a.name for a in result.aspects),
         uncertainty=result.uncertainty,
         source_scalable=_unit_scalable(src) if include_scalability else None,
         target_scalable=_unit_scalable(dst) if include_scalability else None,
@@ -982,9 +1067,10 @@ def compute(
     custom_units: list[dict] | None = None,
     custom_edges: list[dict] | None = None,
     expected_unit: str | None = None,
+    aspects: list[str] | None = None,
     include_scalability: bool = False,
     ctx: Context | None = None,
-) -> ComputeResult | ConversionError:
+) -> ComputeResult | ConversionError | AspectToolError:
     """
     Perform multi-step factor-label calculations with dimensional tracking.
 
@@ -1010,6 +1096,10 @@ def compute(
             - numerator: Numerator unit string (e.g., "kg", "mg")
             - denominator: Denominator unit string, optionally with numeric prefix
                           (e.g., "lb", "2.205 lb", "kg*day")
+            - aspects: Optional aspect names carried by this factor;
+                       folded family-wise into the running result (carry
+                       rule). Irreconcilable positions return a typed
+                       aspect_refused error naming the step.
         custom_units: Optional list of inline unit definitions for this call only.
             Each dict should have: {"name": str, "dimension": str, "aliases": [str]}
         custom_edges: Optional list of inline conversion edges for this call only.
@@ -1018,6 +1108,9 @@ def compute(
             will verify the result has the correct dimension and return diagnostic
             feedback if not. This enables convergence loops where a model can
             iterate on the factor chain until dimensions match.
+        aspects: Optional aspect names on the initial quantity
+            (declare with define(kind="aspect")). The final aspect set
+            is surfaced on the result.
         include_scalability: When True, populate ``source_scalable`` (from
             ``initial_unit``) and ``target_scalable`` (from the final unit
             of the factor chain) on the result. ``None`` for composite
@@ -1126,6 +1219,42 @@ def compute(
         accum: dict[tuple, tuple] = {}
         _accumulate_factors(accum, initial_parsed, +1.0)
 
+        # Aspect carriage rides alongside the numeric pipeline: compute
+        # accumulates raw floats and unit exponents (no Number
+        # arithmetic), so the aspect sets fold through ucon's pure
+        # resolve_mul_aspects — the same vetted engine Number × uses.
+        # Kind values never enter (Law 0): resolution needs only the
+        # operand aspect sets.
+        _forest = None
+
+        def _resolve_aspect_names(names, where):
+            nonlocal _forest
+            if _forest is None:
+                _forest = _get_session(ctx).get_aspect_forest()
+            resolved = []
+            for aspect_name in names:
+                try:
+                    resolved.append(_forest.get(aspect_name))
+                except AspectError as exc:
+                    return None, AspectToolError(
+                        error=f"{exc} (in {where})",
+                        error_type="aspect_error",
+                        likely_fix=(
+                            'Declare it first: define(kind="aspect", '
+                            f'name="{aspect_name}") — or discover existing '
+                            'ones with discover(topic="aspects").'
+                        ),
+                    )
+            return frozenset(resolved), None
+
+        running_aspects: frozenset = frozenset()
+        if aspects:
+            resolved_initial, aspect_err = _resolve_aspect_names(
+                aspects, "initial quantity")
+            if aspect_err is not None:
+                return aspect_err
+            running_aspects = resolved_initial
+
         steps: list[ComputeStep] = []
 
         # Record initial state
@@ -1206,6 +1335,37 @@ def compute(
                 # Build current unit product for step recording
                 running_unit = _build_product_from_accum(accum)
 
+                # Fold this factor's aspects (family-wise; the carry
+                # rule threads partial presence onto the product).
+                factor_aspect_names = factor.get("aspects") or ()
+                factor_aspects: frozenset = frozenset()
+                if factor_aspect_names:
+                    resolved_factor, aspect_err = _resolve_aspect_names(
+                        factor_aspect_names, f"factors[{i}]")
+                    if aspect_err is not None:
+                        return aspect_err
+                    factor_aspects = resolved_factor
+                if running_aspects or factor_aspects:
+                    try:
+                        running_aspects = resolve_mul_aspects(
+                            running_aspects, factor_aspects)
+                    except AspectRefused as exc:
+                        return AspectToolError(
+                            error=f"{exc} (at step {step_num})",
+                            error_type="aspect_refused",
+                            family=exc.family.name,
+                            left=exc.left.name if exc.left else None,
+                            right=exc.right.name if exc.right else None,
+                            policy=exc.policy.value,
+                            likely_fix=(
+                                "Reconcile the factors to one position "
+                                "in this family before combining, or "
+                                "declare the family with "
+                                'join_policy="lca" if degradation to '
+                                "the family root is acceptable."
+                            ),
+                        )
+
             except Exception as e:
                 return ConversionError(
                     error=f"Error applying factor at step {step_num}: {str(e)}",
@@ -1263,6 +1423,7 @@ def compute(
             unit=final_unit_str,
             dimension=final_dim,
             steps=steps,
+            aspects=sorted(a.name for a in running_aspects),
             source_scalable=(
                 _unit_scalable(initial_parsed) if include_scalability else None
             ),
@@ -1843,13 +2004,115 @@ _DEFINE_KINDS: dict[str, tuple[tuple[str, ...], str]] = {
         ("name",),
         'define(kind="basis", name="thermodynamic", additional_components=[{"name": "thermal", "symbol": "Φ", "description": "Thermal marker"}])',
     ),
+    "aspect": (
+        ("name",),
+        'define(kind="aspect", name="icrp103", parent="weighting_standard")',
+    ),
 }
+
+
+def _define_aspect_body(
+    name: str,
+    parent: str | None,
+    join_policy: str,
+    applies_to: list[str] | None,
+    multiplication_policy: str,
+    namespace: str | None,
+    ctx: Context | None,
+) -> AspectDefinitionResult | AspectToolError:
+    """Define a session aspect (family root or child position).
+
+    No legacy constituent exists — aspects arrive with ucon 2.2.0 and
+    land only on the consolidated surface. With ``namespace``, the
+    declaration is qualified per D3 through ucon's ``rewrite_namespace``
+    (name, parent, and ``applies_to`` kind references; ``@name`` escapes
+    to root; explicit ``pkg:name`` spellings pass through).
+    """
+    session = _get_session(ctx)
+
+    entry: dict = {"name": name}
+    if parent is not None:
+        entry["parent"] = parent
+    if applies_to:
+        entry["applies_to"] = list(applies_to)
+    if namespace:
+        payload = rewrite_namespace(
+            {"package": {"namespace": namespace}, "aspects": [entry]}
+        )
+        entry = payload["aspects"][0]
+
+    try:
+        jp = JoinPolicy(join_policy)
+    except ValueError:
+        return AspectToolError(
+            error=f"Unrecognized join_policy: '{join_policy}'",
+            error_type="aspect_error",
+            likely_fix=f"Valid policies: {', '.join(p.value for p in JoinPolicy)}",
+        )
+    try:
+        mp = MultPolicy(multiplication_policy)
+    except ValueError:
+        return AspectToolError(
+            error=f"Unrecognized multiplication_policy: '{multiplication_policy}'",
+            error_type="aspect_error",
+            likely_fix=f"Valid policies: {', '.join(p.value for p in MultPolicy)}",
+        )
+
+    parent_aspect: Aspect | None = None
+    parent_name = entry.get("parent")
+    if parent_name is not None:
+        try:
+            parent_aspect = session.get_aspect_forest().get(parent_name)
+        except AspectError as exc:
+            return AspectToolError(
+                error=str(exc),
+                error_type="aspect_error",
+                likely_fix=(
+                    f"Declare the family root first: "
+                    f'define(kind="aspect", name="{parent_name}")'
+                ),
+            )
+
+    aspect = Aspect(
+        name=entry["name"],
+        parent=parent_aspect,
+        join_policy=jp,
+        applies_to=frozenset(entry.get("applies_to", ())),
+        multiplication_policy=mp,
+    )
+    try:
+        session.register_aspect(aspect)
+    except AspectError as exc:
+        return AspectToolError(
+            error=str(exc),
+            error_type="aspect_error",
+            likely_fix=(
+                "Root-only fields (applies_to, multiplication_policy) "
+                "belong on the family root; names must be unique across "
+                "the forest — qualify with a namespace to avoid collisions."
+            ),
+        )
+
+    return AspectDefinitionResult(
+        success=True,
+        name=aspect.name,
+        family=aspect.root.name,
+        parent=parent_aspect.name if parent_aspect is not None else None,
+        join_policy=jp.value,
+        applies_to=sorted(aspect.applies_to),
+        multiplication_policy=mp.value,
+        message=(
+            f"Aspect '{aspect.name}' registered for session under family "
+            f"'{aspect.root.name}'. Attach with convert(..., aspects=[...]) "
+            f"or discover with discover(topic=\"aspects\")."
+        ),
+    )
 
 
 @mcp.tool()
 @_dispatched_tool("define")
 def define(
-    kind: Literal["unit", "conversion", "constant", "quantity_kind", "basis"],
+    kind: Literal["unit", "conversion", "constant", "quantity_kind", "basis", "aspect"],
     name: str | None = None,
     dimension: str | None = None,
     aliases: list[str] | None = None,
@@ -1867,9 +2130,12 @@ def define(
     category: str = "session",
     disambiguation_hints: list[str] | None = None,
     parent: str | None = None,
-    join_policy: str = "lca",
+    join_policy: str | None = None,
     base: str = "SI",
     additional_components: list[dict] | None = None,
+    applies_to: list[str] | None = None,
+    multiplication_policy: str = "carry",
+    namespace: str | None = None,
     ctx: Context | None = None,
 ) -> (
     UnitDefinitionResult
@@ -1877,9 +2143,11 @@ def define(
     | ConstantDefinitionResult
     | QuantityKindDefinitionResult
     | ExtendedBasisResult
+    | AspectDefinitionResult
     | ConversionError
     | ConstantError
     | KOQError
+    | AspectToolError
     | DefineError
 ):
     """
@@ -1895,6 +2163,12 @@ def define(
     - quantity_kind: name, dimension (optional: description, aliases,
       category, disambiguation_hints, parent, join_policy)
     - basis: name (optional: base, additional_components)
+    - aspect: name (optional: parent, join_policy — default "refuse",
+      applies_to and multiplication_policy on family roots only,
+      namespace for pkg:name qualification)
+
+    ``join_policy`` defaults per kind: "lca" for quantity_kind, "refuse"
+    for aspect.
 
     Definitions persist until reset_session().
 
@@ -1958,7 +2232,16 @@ def define(
             name=name, dimension=dimension, description=description,
             aliases=aliases, category=category,
             disambiguation_hints=disambiguation_hints, parent=parent,
-            join_policy=join_policy, ctx=ctx,
+            join_policy=join_policy if join_policy is not None else "lca",
+            ctx=ctx,
+        )
+    if kind == "aspect":
+        return _define_aspect_body(
+            name=name, parent=parent,
+            join_policy=join_policy if join_policy is not None else "refuse",
+            applies_to=applies_to,
+            multiplication_policy=multiplication_policy,
+            namespace=namespace, ctx=ctx,
         )
     return extend_basis(
         name=name, base=base, additional_components=additional_components,
@@ -4065,9 +4348,11 @@ def validate_result(
     value: float,
     unit: str,
     declared_kind: str | None = None,
+    declared_aspects: list[str] | None = None,
+    aspects: list[str] | None = None,
     reasoning: str | None = None,
     ctx: Context | None = None,
-) -> ValidationResult | KOQError:
+) -> ValidationResult | KOQError | AspectToolError:
     """
     Validate that a computed result matches the declared quantity kind.
 
@@ -4079,6 +4364,12 @@ def validate_result(
         value: The computed numeric value.
         unit: The result unit string.
         declared_kind: Optional kind to validate against (uses active declaration if None).
+        declared_aspects: Optional aspect names the result is expected to
+            carry — checked the way the declared kind is: a mismatch
+            against the actual aspects fails validation.
+        aspects: The result's actual aspect names (e.g. from a
+            ComputeResult's ``aspects`` field). Compared against
+            declared_aspects when both are given.
         reasoning: Optional reasoning text for semantic consistency checking.
 
     Returns:
@@ -4299,6 +4590,44 @@ def validate_result(
         else:
             explanation = f"Result validated as '{kind_name}'"
 
+    # ── Aspect check (2.2.0): declared vs actual, set-equal ──────────
+    declared_aspect_names: list[str] = []
+    result_aspect_names: list[str] = sorted(aspects or [])
+    aspect_match: bool | None = None
+    if declared_aspects is not None:
+        forest = session.get_aspect_forest()
+        for aspect_name in declared_aspects:
+            try:
+                forest.get(aspect_name)
+            except AspectError as exc:
+                return AspectToolError(
+                    error=str(exc),
+                    error_type="aspect_error",
+                    likely_fix=(
+                        'Declare it first: define(kind="aspect", '
+                        f'name="{aspect_name}").'
+                    ),
+                )
+        declared_aspect_names = sorted(set(declared_aspects))
+        aspect_match = declared_aspect_names == result_aspect_names
+        if not aspect_match:
+            passed = False
+            missing = set(declared_aspect_names) - set(result_aspect_names)
+            extra = set(result_aspect_names) - set(declared_aspect_names)
+            detail = []
+            if missing:
+                detail.append(f"missing: {', '.join(sorted(missing))}")
+            if extra:
+                detail.append(f"unexpected: {', '.join(sorted(extra))}")
+            semantic_warnings.append(
+                f"Aspect mismatch ({'; '.join(detail)})"
+            )
+            suggestions.append(
+                "Carry the declared aspects through the computation "
+                "(convert/compute thread them), or correct the "
+                "declaration."
+            )
+
     # Clear active declaration
     session.set_active_computation(None)
 
@@ -4313,6 +4642,9 @@ def validate_result(
         result_kind=result_kind_name,
         kind_match=kind_match,
         kind_candidates=kind_candidates,
+        declared_aspects=declared_aspect_names,
+        result_aspects=result_aspect_names,
+        aspect_match=aspect_match,
         semantic_warnings=semantic_warnings,
         confidence=confidence,
         explanation=explanation,
@@ -4718,6 +5050,7 @@ _DISCOVER_TOPICS: dict[str, frozenset[str]] = {
     "quantity_kinds": frozenset({"dimension", "category", "include_builtin"}),
     "kind_formulas": frozenset(),
     "extended_bases": frozenset(),
+    "aspects": frozenset({"family"}),
 }
 
 
@@ -4733,10 +5066,12 @@ def discover(
         "quantity_kinds",
         "kind_formulas",
         "extended_bases",
+        "aspects",
     ],
     dimension: str | None = None,
     category: str | None = None,
     include_builtin: bool = True,
+    family: str | None = None,
     ctx: Context | None = None,
 ) -> DiscoverResult | DiscoverError | ConversionError | ConstantError | KOQError:
     """
@@ -4750,6 +5085,7 @@ def discover(
     - units: dimension (e.g., "length")
     - constants: category ("exact", "derived", "measured", "session", "all")
     - quantity_kinds: dimension, category, include_builtin
+    - aspects: family (a family-root name)
     - all other topics take no filters
 
     Args:
@@ -4784,6 +5120,7 @@ def discover(
         ("dimension", dimension, dimension is not None),
         ("category", category, category is not None),
         ("include_builtin", include_builtin, include_builtin is False),
+        ("family", family, family is not None),
     ):
         if not is_set:
             continue
@@ -4825,6 +5162,24 @@ def discover(
         items = kinds_found
     elif topic == "kind_formulas":
         items = _list_kind_formulas_body(ctx=ctx)
+    elif topic == "aspects":
+        forest = _get_session(ctx).get_aspect_forest()
+        items = sorted(
+            (
+                {
+                    "name": a.name,
+                    "family": a.root.name,
+                    "parent": a.parent.name if a.parent is not None else None,
+                    "join_policy": a.join_policy.value,
+                    "applies_to": sorted(a.applies_to),
+                    "multiplication_policy": a.multiplication_policy.value,
+                    "is_root": a.is_root,
+                }
+                for a in forest
+                if family is None or a.root.name == family
+            ),
+            key=lambda d: (d["family"], not d["is_root"], d["name"]),
+        )
     else:  # extended_bases
         items = _list_extended_bases_body(ctx=ctx)
 

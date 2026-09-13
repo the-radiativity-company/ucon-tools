@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from ucon.aspects import Aspect, AspectForest
     from ucon.constants import Constant
     from ucon.core import Unit
     from ucon.dimension import Dimension
@@ -68,6 +69,11 @@ class SessionState(Protocol):
 
     def get_constants(self) -> dict[str, "Constant"]:
         """Get the session's custom constants."""
+        ...
+
+    def get_aspect_forest(self) -> "AspectForest":
+        """Get the session's aspect forest (base-graph aspects plus
+        session declarations)."""
         ...
 
     def get_quantity_kinds(self) -> dict[str, "QuantityKindInfo"]:
@@ -173,6 +179,7 @@ class DefaultSessionState:
         self._active_computation: "ComputationDeclaration | None" = None
         self._extended_bases: dict[str, "ExtendedBasisInfo"] = {}
         self._session_dimensions: dict[str, "Dimension"] = {}
+        self._session_aspects: dict[str, "Aspect"] = {}
 
     def get_graph(self) -> "ConversionGraph":
         """Get or create the session graph.
@@ -362,6 +369,46 @@ class DefaultSessionState:
         """Get the session's dimensions created from extended bases."""
         return self._session_dimensions
 
+    def get_aspect_forest(self) -> "AspectForest":
+        """Build the session's aspect forest, fresh on each call.
+
+        Composes any base-graph forest (``[[aspects]]`` loaded from
+        TOML) with session declarations. There are no builtin aspects
+        (ucon ships mechanism, domains ship vocabulary), so a pristine
+        session over the stock graph yields an empty forest.
+        Construct-fresh mirrors :meth:`get_unit_system`; the forest is
+        immutable after construction, so mutation means re-registering.
+        """
+        from ucon.aspects import AspectForest
+
+        base = getattr(self._base_graph, "_aspect_forest", None)
+        nodes: list["Aspect"] = list(base) if base is not None else []
+        nodes.extend(self._session_aspects.values())
+        return AspectForest(nodes)
+
+    def register_aspect(self, aspect: "Aspect") -> "AspectForest":
+        """Register a session aspect, atomically validated.
+
+        The candidate forest (base + prior session aspects + the new
+        node's parent closure) is built before the registration is
+        recorded, so a structurally invalid declaration —
+        duplicate name, root-only field on a child — raises
+        :class:`~ucon.aspects.AspectError` and leaves the session
+        unchanged. Returns the new forest.
+        """
+        from ucon.aspects import AspectForest
+
+        base = getattr(self._base_graph, "_aspect_forest", None)
+        nodes: list["Aspect"] = list(base) if base is not None else []
+        nodes.extend(self._session_aspects.values())
+        nodes.append(aspect)
+        forest = AspectForest(nodes)  # raises AspectError on invalid
+        node: "Aspect | None" = aspect
+        while node is not None:
+            self._session_aspects.setdefault(node.name, node)
+            node = node.parent
+        return forest
+
     def reset(self) -> None:
         """Reset session to default state.
 
@@ -375,3 +422,4 @@ class DefaultSessionState:
         self._active_computation = None
         self._extended_bases = {}
         self._session_dimensions = {}
+        self._session_aspects = {}
