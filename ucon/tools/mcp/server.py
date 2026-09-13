@@ -4348,9 +4348,11 @@ def validate_result(
     value: float,
     unit: str,
     declared_kind: str | None = None,
+    declared_aspects: list[str] | None = None,
+    aspects: list[str] | None = None,
     reasoning: str | None = None,
     ctx: Context | None = None,
-) -> ValidationResult | KOQError:
+) -> ValidationResult | KOQError | AspectToolError:
     """
     Validate that a computed result matches the declared quantity kind.
 
@@ -4362,6 +4364,12 @@ def validate_result(
         value: The computed numeric value.
         unit: The result unit string.
         declared_kind: Optional kind to validate against (uses active declaration if None).
+        declared_aspects: Optional aspect names the result is expected to
+            carry — checked the way the declared kind is: a mismatch
+            against the actual aspects fails validation.
+        aspects: The result's actual aspect names (e.g. from a
+            ComputeResult's ``aspects`` field). Compared against
+            declared_aspects when both are given.
         reasoning: Optional reasoning text for semantic consistency checking.
 
     Returns:
@@ -4582,6 +4590,44 @@ def validate_result(
         else:
             explanation = f"Result validated as '{kind_name}'"
 
+    # ── Aspect check (2.2.0): declared vs actual, set-equal ──────────
+    declared_aspect_names: list[str] = []
+    result_aspect_names: list[str] = sorted(aspects or [])
+    aspect_match: bool | None = None
+    if declared_aspects is not None:
+        forest = session.get_aspect_forest()
+        for aspect_name in declared_aspects:
+            try:
+                forest.get(aspect_name)
+            except AspectError as exc:
+                return AspectToolError(
+                    error=str(exc),
+                    error_type="aspect_error",
+                    likely_fix=(
+                        'Declare it first: define(kind="aspect", '
+                        f'name="{aspect_name}").'
+                    ),
+                )
+        declared_aspect_names = sorted(set(declared_aspects))
+        aspect_match = declared_aspect_names == result_aspect_names
+        if not aspect_match:
+            passed = False
+            missing = set(declared_aspect_names) - set(result_aspect_names)
+            extra = set(result_aspect_names) - set(declared_aspect_names)
+            detail = []
+            if missing:
+                detail.append(f"missing: {', '.join(sorted(missing))}")
+            if extra:
+                detail.append(f"unexpected: {', '.join(sorted(extra))}")
+            semantic_warnings.append(
+                f"Aspect mismatch ({'; '.join(detail)})"
+            )
+            suggestions.append(
+                "Carry the declared aspects through the computation "
+                "(convert/compute thread them), or correct the "
+                "declaration."
+            )
+
     # Clear active declaration
     session.set_active_computation(None)
 
@@ -4596,6 +4642,9 @@ def validate_result(
         result_kind=result_kind_name,
         kind_match=kind_match,
         kind_candidates=kind_candidates,
+        declared_aspects=declared_aspect_names,
+        result_aspects=result_aspect_names,
+        aspect_match=aspect_match,
         semantic_warnings=semantic_warnings,
         confidence=confidence,
         explanation=explanation,

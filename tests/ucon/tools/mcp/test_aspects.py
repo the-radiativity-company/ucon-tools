@@ -323,5 +323,74 @@ class ComputeAspectFoldTestCase(unittest.TestCase):
         self.assertEqual(result.aspects, [])
 
 
+class ValidateResultAspectTestCase(unittest.TestCase):
+    """Declared aspects are checked the way declared kinds are."""
+
+    @classmethod
+    def setUpClass(cls):
+        from ucon.tools.mcp.server import (
+            define,
+            reset_session,
+            validate_result,
+            AspectToolError,
+        )
+        cls.define = staticmethod(define)
+        cls.reset_session = staticmethod(reset_session)
+        cls.validate_result = staticmethod(validate_result)
+        cls.AspectToolError = AspectToolError
+
+    def setUp(self):
+        self.reset_session()
+        self.define(kind="quantity_kind", name="beam_length",
+                    dimension="length")
+        self.define(kind="aspect", name="calibrated")
+
+    def tearDown(self):
+        self.reset_session()
+
+    def test_matching_aspects_pass(self):
+        result = self.validate_result(
+            value=5.0, unit="m", declared_kind="beam_length",
+            declared_aspects=["calibrated"], aspects=["calibrated"],
+        )
+        self.assertTrue(result.passed)
+        self.assertTrue(result.aspect_match)
+        self.assertEqual(result.declared_aspects, ["calibrated"])
+        self.assertEqual(result.result_aspects, ["calibrated"])
+
+    def test_missing_aspect_fails_validation(self):
+        result = self.validate_result(
+            value=5.0, unit="m", declared_kind="beam_length",
+            declared_aspects=["calibrated"], aspects=[],
+        )
+        self.assertFalse(result.passed)
+        self.assertFalse(result.aspect_match)
+        self.assertTrue(
+            any("missing: calibrated" in w for w in result.semantic_warnings))
+
+    def test_unexpected_aspect_fails_validation(self):
+        result = self.validate_result(
+            value=5.0, unit="m", declared_kind="beam_length",
+            declared_aspects=[], aspects=["calibrated"],
+        )
+        self.assertFalse(result.passed)
+        self.assertTrue(
+            any("unexpected: calibrated" in w
+                for w in result.semantic_warnings))
+
+    def test_undeclared_aspect_name_is_typed_error(self):
+        result = self.validate_result(
+            value=5.0, unit="m", declared_kind="beam_length",
+            declared_aspects=["ghost"], aspects=[],
+        )
+        self.assertIsInstance(result, self.AspectToolError)
+        self.assertEqual(result.error_type, "aspect_error")
+
+    def test_no_aspect_params_leaves_check_unjudged(self):
+        result = self.validate_result(
+            value=5.0, unit="m", declared_kind="beam_length")
+        self.assertIsNone(result.aspect_match)
+
+
 if __name__ == "__main__":
     unittest.main()
