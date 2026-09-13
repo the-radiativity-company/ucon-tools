@@ -447,6 +447,7 @@ class ConversionResult(BaseModel):
     unit: str | None
     dimension: str
     kind: str | None = None
+    aspects: list[str] = []
     uncertainty: float | None = None
     source_scalable: bool | None = None
     target_scalable: bool | None = None
@@ -704,9 +705,10 @@ def convert(
     custom_units: list[dict] | None = None,
     custom_edges: list[dict] | None = None,
     kind: str | None = None,
+    aspects: list[str] | None = None,
     include_scalability: bool = False,
     ctx: Context | None = None,
-) -> ConversionResult | ConversionError:
+) -> ConversionResult | ConversionError | AspectToolError:
     """
     Convert a numeric value from one unit to another.
 
@@ -732,6 +734,12 @@ def convert(
             When provided, the Number is tagged with this kind and Number.to()
             preserves it through conversion. The kind must exist in the lattice
             and its dimension must match the source unit's dimension.
+        aspects: Optional aspect names to attach to the measurement
+            (declare with define(kind="aspect"); list with
+            discover(topic="aspects")). Aspects thread through the
+            conversion and are surfaced on the result. A restricted
+            family attached to a non-matching kind returns a typed
+            aspect_not_applicable error.
         include_scalability: When True, populate ``source_scalable`` and
             ``target_scalable`` on the result, reflecting the leaf-unit
             ``Unit.scalable`` flag. ``None`` for composite ``UnitProduct``
@@ -806,10 +814,43 @@ def convert(
                         ],
                     )
 
+            # 3b. Resolve aspect names against the session forest
+            resolved_aspects: list = []
+            if aspects:
+                forest = _get_session(ctx).get_aspect_forest()
+                for aspect_name in aspects:
+                    try:
+                        resolved_aspects.append(forest.get(aspect_name))
+                    except AspectError as exc:
+                        return AspectToolError(
+                            error=str(exc),
+                            error_type="aspect_error",
+                            likely_fix=(
+                                'Declare it first: define(kind="aspect", '
+                                f'name="{aspect_name}") — or discover '
+                                'existing ones with discover(topic="aspects").'
+                            ),
+                        )
+
             # 4. Perform conversion
             try:
-                num = Number(quantity=value, unit=src, kind=resolved_kind)
+                num = Number(
+                    quantity=value, unit=src, kind=resolved_kind,
+                    aspects=resolved_aspects,
+                )
                 result = num.to(dst, graph=graph)
+            except AspectNotApplicable as exc:
+                return AspectToolError(
+                    error=str(exc),
+                    error_type="aspect_not_applicable",
+                    family=exc.family.name,
+                    kind=exc.kind.name if exc.kind is not None else None,
+                    likely_fix=(
+                        "The family's applies_to restricts which kinds it "
+                        "may attach to; pass a matching kind= or use an "
+                        "unrestricted family."
+                    ),
+                )
             except DimensionMismatch:
                 return build_dimension_mismatch_error(from_unit, to_unit, src, dst)
             except ConversionNotFound as e:
@@ -833,6 +874,7 @@ def convert(
         unit=unit_str,
         dimension=dim_name,
         kind=result_kind,
+        aspects=sorted(a.name for a in result.aspects),
         uncertainty=result.uncertainty,
         source_scalable=_unit_scalable(src) if include_scalability else None,
         target_scalable=_unit_scalable(dst) if include_scalability else None,

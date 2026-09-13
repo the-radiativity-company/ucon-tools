@@ -176,5 +176,67 @@ class AspectSurfaceTestCase(unittest.TestCase):
         self.assertEqual(result.count, 0)
 
 
+
+class ConvertAspectThreadingTestCase(unittest.TestCase):
+    """Aspects on convert(): attach, thread, surface (ucon 2.2.0 carry)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from ucon.tools.mcp.server import (
+            convert,
+            define,
+            reset_session,
+            AspectToolError,
+        )
+        cls.convert = staticmethod(convert)
+        cls.define = staticmethod(define)
+        cls.reset_session = staticmethod(reset_session)
+        cls.AspectToolError = AspectToolError
+
+    def setUp(self):
+        self.reset_session()
+
+    def tearDown(self):
+        self.reset_session()
+
+    def test_aspects_thread_through_conversion(self):
+        self.define(kind="aspect", name="coverage", applies_to=["*"])
+        self.define(kind="aspect", name="k2", parent="coverage")
+        result = self.convert(5.0, "m", "km", aspects=["k2"])
+        self.assertEqual(result.quantity, 0.005)
+        self.assertEqual(result.aspects, ["k2"])
+
+    def test_no_aspects_yields_empty_list(self):
+        result = self.convert(1.0, "m", "km")
+        self.assertEqual(result.aspects, [])
+
+    def test_unknown_aspect_is_typed_error(self):
+        result = self.convert(5.0, "m", "km", aspects=["ghost"])
+        self.assertIsInstance(result, self.AspectToolError)
+        self.assertEqual(result.error_type, "aspect_error")
+        self.assertIn("ghost", result.likely_fix)
+
+    def test_restricted_family_on_unkinded_is_not_applicable(self):
+        """applies_to enforcement surfaces as a typed attachment error
+        with the family named."""
+        self.define(kind="aspect", name="weighting_standard",
+                    applies_to=["dose_equivalent"])
+        self.define(kind="aspect", name="icrp103",
+                    parent="weighting_standard")
+        result = self.convert(2.0, "m", "km", aspects=["icrp103"])
+        self.assertIsInstance(result, self.AspectToolError)
+        self.assertEqual(result.error_type, "aspect_not_applicable")
+        self.assertEqual(result.family, "weighting_standard")
+
+    def test_kind_and_aspects_together(self):
+        self.define(kind="quantity_kind", name="beam_length",
+                    dimension="length")
+        self.define(kind="aspect", name="calibrated")
+        result = self.convert(5.0, "m", "km", kind="beam_length",
+                              aspects=["calibrated"])
+        self.assertEqual(result.kind, "beam_length")
+        self.assertEqual(result.aspects, ["calibrated"])
+
+
 if __name__ == "__main__":
     unittest.main()
