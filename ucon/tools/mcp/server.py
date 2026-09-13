@@ -2058,7 +2058,11 @@ def diff_systems(
     """
     session = _get_session(ctx)
     session_system = session.get_unit_system()
-    base_system = active_system()
+    # Inside the dispatched scope, active_system() IS the
+    # session-effective system — reading it here would diff the session
+    # against itself (#42). The session supplies its own pre-mutation
+    # baseline instead.
+    base_system = session.get_base_system()
 
     diff = base_system.diff(session_system)
 
@@ -2099,7 +2103,9 @@ def check_compatibility(
     """
     session = _get_session(ctx)
     session_system = session.get_unit_system()
-    base_system = active_system()
+    # Same baseline correction as diff_systems (#42): the ambient
+    # system inside the dispatched scope is the session-effective one.
+    base_system = session.get_base_system()
 
     compatible = base_system.compatible_with(session_system)
     result: dict = {

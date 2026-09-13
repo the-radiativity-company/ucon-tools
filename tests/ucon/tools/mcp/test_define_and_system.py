@@ -171,9 +171,50 @@ class TestSystemActions(DefineSystemTestCase):
         for key in ("units", "dimensions", "conversions", "constants"):
             self.assertIn(key, result)
 
+    def test_diff_pristine_session_reports_zeros(self):
+        result = self.system(action="diff")
+        self.assertEqual(result["units"]["added"], 0)
+        self.assertEqual(result["conversions"]["added"], 0)
+
+    def test_diff_sees_session_defined_unit_and_edge(self):
+        """Regression for #42: session definitions must show in the diff.
+
+        The dispatched scope activates the session-effective system, so
+        a diff baselined on ``active_system()`` compares the session
+        against itself and reports zeros for everything — while the
+        defined edge happily converts.
+        """
+        self.define(kind="unit", name="smoot", dimension="length",
+                    aliases=["smoots"])
+        self.define(kind="conversion", src="smoot", dst="m",
+                    factor=1.7018)
+        result = self.system(action="diff")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["units"]["added"], 1)
+        # Forward and auto-registered inverse edge.
+        self.assertEqual(result["conversions"]["added"], 2)
+        self.assertEqual(result["units"]["removed"], 0)
+        self.assertEqual(result["units"]["redefined"], 0)
+
+    def test_diff_resets_with_the_session(self):
+        self.define(kind="unit", name="smoot", dimension="length")
+        self.reset_session()
+        result = self.system(action="diff")
+        self.assertEqual(result["units"]["added"], 0)
+        self.assertEqual(result["conversions"]["added"], 0)
+
     def test_check_compatibility(self):
         result = self.system(action="check_compatibility")
         self.assertIn("compatible", result)
+
+    def test_check_compatibility_with_session_additions(self):
+        """Additions are compatible; the check must not be the trivial
+        session-vs-itself comparison (#42)."""
+        self.define(kind="unit", name="smoot", dimension="length")
+        self.define(kind="conversion", src="smoot", dst="m",
+                    factor=1.7018)
+        result = self.system(action="check_compatibility")
+        self.assertTrue(result["compatible"])
 
     def test_unknown_action(self):
         result = self.system(action="explode")
