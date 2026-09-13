@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Adopts ucon 2.2.0: the aspect stratum lands on the consolidated tool
+surface, and session definitions gain D3 namespace qualification.
+
+### Changed
+
+- **ucon floor raised to 2.2.0** (from 2.1.7).
+
+### Added
+
+- **`define(kind="aspect")`.** Declares session aspect families and
+  positions: `parent`, `join_policy` (default `"refuse"` for aspects;
+  quantity kinds keep `"lca"` via a per-kind default), root-only
+  `applies_to` / `multiplication_policy`, and `namespace` for D3
+  `pkg:name` qualification through ucon's `rewrite_namespace` (names,
+  parents, and `applies_to` references; `@name` escapes; explicit
+  qualified spellings pass through). Structural failures return a
+  typed `AspectToolError` and leave the session unchanged.
+- **`discover(topic="aspects")`.** Lists the session forest —
+  name, family, parent, policies, `applies_to`, `is_root` — roots
+  first, filterable by `family` (the filter is rejected on other
+  topics, matching the discover contract).
+- **Aspect threading in `convert` and `compute`.** `convert` accepts
+  `aspects=[...]`, attaches them to the measurement (ucon enforces
+  `applies_to` at attachment — violations return
+  `aspect_not_applicable` with the family named), threads them through
+  the conversion, and surfaces them on the result. `compute` accepts
+  `aspects` on the initial quantity and per-factor `"aspects"` keys,
+  folding family-wise through ucon's `resolve_mul_aspects` alongside
+  the numeric pipeline — the carry rule threads a factor's provenance
+  onto the product, and irreconcilable positions return
+  `aspect_refused` carrying the full warrant (`family`, `left`,
+  `right`, `policy`) and the offending step.
+- **Aspect-aware `validate_result`.** `declared_aspects` are checked
+  the way the declared kind is: compared set-wise against the result's
+  `aspects`, with the delta named in `semantic_warnings` on mismatch
+  and `aspect_match` surfaced alongside `kind_match`.
+- **`SessionState.get_aspect_forest()` / `register_aspect()`** —
+  session-owned aspect state composing any base-graph forest with
+  session declarations; registration is atomically validated (an
+  invalid declaration never sticks). Cleared by `reset_session()`.
+
 ## [0.9.1] - 2026-09-13
 
 ### Fixed
