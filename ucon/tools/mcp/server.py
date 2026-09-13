@@ -30,6 +30,7 @@ from ucon.aspects import (
     AspectNotApplicable,
     AspectRefused,
     MultPolicy,
+    resolve_mul_aspects,
 )
 from ucon.kinds import DisjointKinds, JoinPolicy, JoinRefused, Kind, KindNotFound, NameCollision
 from ucon.parsing.namespaces import rewrite_namespace
@@ -525,6 +526,7 @@ class ComputeResult(BaseModel):
     unit: str
     dimension: str
     steps: list[ComputeStep]
+    aspects: list[str] = []
     source_scalable: bool | None = None
     target_scalable: bool | None = None
 
@@ -1065,9 +1067,10 @@ def compute(
     custom_units: list[dict] | None = None,
     custom_edges: list[dict] | None = None,
     expected_unit: str | None = None,
+    aspects: list[str] | None = None,
     include_scalability: bool = False,
     ctx: Context | None = None,
-) -> ComputeResult | ConversionError:
+) -> ComputeResult | ConversionError | AspectToolError:
     """
     Perform multi-step factor-label calculations with dimensional tracking.
 
@@ -1093,6 +1096,10 @@ def compute(
             - numerator: Numerator unit string (e.g., "kg", "mg")
             - denominator: Denominator unit string, optionally with numeric prefix
                           (e.g., "lb", "2.205 lb", "kg*day")
+            - aspects: Optional aspect names carried by this factor;
+                       folded family-wise into the running result (carry
+                       rule). Irreconcilable positions return a typed
+                       aspect_refused error naming the step.
         custom_units: Optional list of inline unit definitions for this call only.
             Each dict should have: {"name": str, "dimension": str, "aliases": [str]}
         custom_edges: Optional list of inline conversion edges for this call only.
@@ -1101,6 +1108,9 @@ def compute(
             will verify the result has the correct dimension and return diagnostic
             feedback if not. This enables convergence loops where a model can
             iterate on the factor chain until dimensions match.
+        aspects: Optional aspect names on the initial quantity
+            (declare with define(kind="aspect")). The final aspect set
+            is surfaced on the result.
         include_scalability: When True, populate ``source_scalable`` (from
             ``initial_unit``) and ``target_scalable`` (from the final unit
             of the factor chain) on the result. ``None`` for composite
@@ -1209,6 +1219,42 @@ def compute(
         accum: dict[tuple, tuple] = {}
         _accumulate_factors(accum, initial_parsed, +1.0)
 
+        # Aspect carriage rides alongside the numeric pipeline: compute
+        # accumulates raw floats and unit exponents (no Number
+        # arithmetic), so the aspect sets fold through ucon's pure
+        # resolve_mul_aspects — the same vetted engine Number × uses.
+        # Kind values never enter (Law 0): resolution needs only the
+        # operand aspect sets.
+        _forest = None
+
+        def _resolve_aspect_names(names, where):
+            nonlocal _forest
+            if _forest is None:
+                _forest = _get_session(ctx).get_aspect_forest()
+            resolved = []
+            for aspect_name in names:
+                try:
+                    resolved.append(_forest.get(aspect_name))
+                except AspectError as exc:
+                    return None, AspectToolError(
+                        error=f"{exc} (in {where})",
+                        error_type="aspect_error",
+                        likely_fix=(
+                            'Declare it first: define(kind="aspect", '
+                            f'name="{aspect_name}") — or discover existing '
+                            'ones with discover(topic="aspects").'
+                        ),
+                    )
+            return frozenset(resolved), None
+
+        running_aspects: frozenset = frozenset()
+        if aspects:
+            resolved_initial, aspect_err = _resolve_aspect_names(
+                aspects, "initial quantity")
+            if aspect_err is not None:
+                return aspect_err
+            running_aspects = resolved_initial
+
         steps: list[ComputeStep] = []
 
         # Record initial state
@@ -1289,6 +1335,37 @@ def compute(
                 # Build current unit product for step recording
                 running_unit = _build_product_from_accum(accum)
 
+                # Fold this factor's aspects (family-wise; the carry
+                # rule threads partial presence onto the product).
+                factor_aspect_names = factor.get("aspects") or ()
+                factor_aspects: frozenset = frozenset()
+                if factor_aspect_names:
+                    resolved_factor, aspect_err = _resolve_aspect_names(
+                        factor_aspect_names, f"factors[{i}]")
+                    if aspect_err is not None:
+                        return aspect_err
+                    factor_aspects = resolved_factor
+                if running_aspects or factor_aspects:
+                    try:
+                        running_aspects = resolve_mul_aspects(
+                            running_aspects, factor_aspects)
+                    except AspectRefused as exc:
+                        return AspectToolError(
+                            error=f"{exc} (at step {step_num})",
+                            error_type="aspect_refused",
+                            family=exc.family.name,
+                            left=exc.left.name if exc.left else None,
+                            right=exc.right.name if exc.right else None,
+                            policy=exc.policy.value,
+                            likely_fix=(
+                                "Reconcile the factors to one position "
+                                "in this family before combining, or "
+                                "declare the family with "
+                                'join_policy="lca" if degradation to '
+                                "the family root is acceptable."
+                            ),
+                        )
+
             except Exception as e:
                 return ConversionError(
                     error=f"Error applying factor at step {step_num}: {str(e)}",
@@ -1346,6 +1423,7 @@ def compute(
             unit=final_unit_str,
             dimension=final_dim,
             steps=steps,
+            aspects=sorted(a.name for a in running_aspects),
             source_scalable=(
                 _unit_scalable(initial_parsed) if include_scalability else None
             ),

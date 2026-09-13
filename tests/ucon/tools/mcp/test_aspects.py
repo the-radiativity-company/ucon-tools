@@ -238,5 +238,90 @@ class ConvertAspectThreadingTestCase(unittest.TestCase):
         self.assertEqual(result.aspects, ["calibrated"])
 
 
+class ComputeAspectFoldTestCase(unittest.TestCase):
+    """Aspects on compute(): the carry rule folds across the factor
+    chain alongside the numeric pipeline (Law 0: resolution reads only
+    the aspect sets)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from ucon.tools.mcp.server import (
+            compute,
+            define,
+            reset_session,
+            AspectToolError,
+        )
+        cls.compute = staticmethod(compute)
+        cls.define = staticmethod(define)
+        cls.reset_session = staticmethod(reset_session)
+        cls.AspectToolError = AspectToolError
+
+    def setUp(self):
+        self.reset_session()
+        self.define(kind="aspect", name="weighting_standard")
+        self.define(kind="aspect", name="icrp60",
+                    parent="weighting_standard")
+        self.define(kind="aspect", name="icrp103",
+                    parent="weighting_standard")
+
+    def tearDown(self):
+        self.reset_session()
+
+    def test_initial_aspects_carry_through_the_chain(self):
+        result = self.compute(
+            initial_value=2.0, initial_unit="mg/kg",
+            factors=[{"value": 70, "numerator": "kg", "denominator": "ea"}],
+            aspects=["icrp103"],
+        )
+        self.assertEqual(result.quantity, 140.0)
+        self.assertEqual(result.aspects, ["icrp103"])
+
+    def test_factor_aspects_carry_onto_the_result(self):
+        """Case 1c at the tool surface: an unqualified running value
+        times a qualified factor — provenance rides the product."""
+        result = self.compute(
+            initial_value=2.0, initial_unit="mg/kg",
+            factors=[{"value": 70, "numerator": "kg", "denominator": "ea",
+                      "aspects": ["icrp103"]}],
+        )
+        self.assertEqual(result.aspects, ["icrp103"])
+
+    def test_irreconcilable_factors_refuse_with_warrant(self):
+        result = self.compute(
+            initial_value=2.0, initial_unit="mg",
+            factors=[
+                {"value": 1, "numerator": "ea", "denominator": "ea",
+                 "aspects": ["icrp60"]},
+                {"value": 1, "numerator": "ea", "denominator": "ea",
+                 "aspects": ["icrp103"]},
+            ],
+        )
+        self.assertIsInstance(result, self.AspectToolError)
+        self.assertEqual(result.error_type, "aspect_refused")
+        self.assertEqual(result.family, "weighting_standard")
+        self.assertEqual(
+            {result.left, result.right}, {"icrp60", "icrp103"})
+        self.assertEqual(result.policy, "refuse")
+        self.assertIn("step 2", result.error)
+
+    def test_unknown_aspect_names_the_factor(self):
+        result = self.compute(
+            initial_value=1.0, initial_unit="mg",
+            factors=[{"value": 1, "numerator": "ea", "denominator": "ea",
+                      "aspects": ["ghost"]}],
+        )
+        self.assertIsInstance(result, self.AspectToolError)
+        self.assertEqual(result.error_type, "aspect_error")
+        self.assertIn("factors[0]", result.error)
+
+    def test_no_aspects_yields_empty_list(self):
+        result = self.compute(
+            initial_value=1.0, initial_unit="mg",
+            factors=[{"value": 1, "numerator": "g",
+                      "denominator": "1000 mg"}],
+        )
+        self.assertEqual(result.aspects, [])
+
+
 if __name__ == "__main__":
     unittest.main()
