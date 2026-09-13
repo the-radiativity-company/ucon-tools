@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-13
+
+### Fixed
+
+- **`system(action="diff")` no longer compares the session against
+  itself.** (#42) Every dispatched tool body runs with the
+  session-effective system active, so baselining the diff on
+  `active_system()` produced all-zero reports while session-defined
+  units and edges were live and converting. The session now supplies
+  its own pre-mutation baseline (`SessionState.get_base_system()`,
+  rooted on the pristine base graph), and `check_compatibility` uses
+  the same corrected comparand. Additionally, graph-registered session
+  units now surface in the session system's `units` mapping, so
+  `units.added` reports them alongside `conversions.added`.
+
+## [0.9.0] - 2026-09-11
+
 Tool-surface consolidation (phase 1 of 2): discovery collapses behind
 `discover`, session definition behind `define`, and system operations
 behind `system`; superseded tools are deprecated in place. Removal
@@ -938,7 +955,9 @@ through an explicit capability-resolution step before invocation.
 - Install via `pip install ucon-tools[mcp]`
 
 <!-- Links -->
-[Unreleased]: https://github.com/withtwoemms/ucon-tools/compare/0.6.0...HEAD
+[Unreleased]: https://github.com/withtwoemms/ucon-tools/compare/0.9.1...HEAD
+[0.9.1]: https://github.com/withtwoemms/ucon-tools/compare/0.9.0...0.9.1
+[0.9.0]: https://github.com/withtwoemms/ucon-tools/compare/0.8.0...0.9.0
 [0.6.0]: https://github.com/withtwoemms/ucon-tools/compare/0.5.3...0.6.0
 [0.5.3]: https://github.com/withtwoemms/ucon-tools/compare/0.5.2...0.5.3
 [0.5.2]: https://github.com/withtwoemms/ucon-tools/compare/0.5.1...0.5.2

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from ucon.constants import Constant
+    from ucon.core import Unit
     from ucon.dimension import Dimension
     from ucon.formulas import FormulaRegistry
     from ucon.graph import ConversionGraph
@@ -51,6 +52,17 @@ class SessionState(Protocol):
         ``conversion_graph``; reach-through paths (basis graph,
         constants, contexts) read from the surrounding globals via
         ``active_system()``-style snapshotting.
+        """
+        ...
+
+    def get_base_system(self) -> "UnitSystem":
+        """Get the session's pre-mutation baseline system.
+
+        Rooted on the pristine base graph, with session-registered
+        units excluded. The correct comparand for ``diff`` /
+        ``compatible_with`` — inside a dispatched tool the *active*
+        system is the session-effective one, so an ambient read would
+        compare the session against itself.
         """
         ...
 
@@ -172,14 +184,38 @@ class DefaultSessionState:
             self._graph = self._base_graph.copy()
         return self._graph
 
+    def _session_units(self) -> dict[str, "Unit"]:
+        """Units registered on the session graph but absent from base.
+
+        ``define(kind="unit")`` writes through ``graph.register_unit``,
+        so session-defined units live in the graph's name registry, not
+        in any ``UnitSystem.units`` mapping. Comparing registries against
+        ``self._base_graph`` recovers exactly the session's additions,
+        keyed by canonical name (alias entries dedupe onto their unit).
+        Reaching into ``_name_registry_cs`` mirrors the ``_contexts``
+        reach in :meth:`get_unit_system`; the graph offers no public
+        enumeration of registered units.
+        """
+        if self._graph is None:
+            return {}
+        base_keys = self._base_graph._name_registry_cs.keys()
+        return {
+            unit.name: unit
+            for key, unit in self._graph._name_registry_cs.items()
+            if key not in base_keys
+        }
+
     def get_unit_system(self) -> "UnitSystem":
         """Build a :class:`~ucon.system.UnitSystem` over the session graph.
 
         The returned ``UnitSystem``'s ``conversions`` field is the
-        session's mutable graph (``self.get_graph()``); the other
-        registries (``units``, ``dimensions``, ``basis``,
-        ``base_units``, ``basis_graph``, ``contexts``, ``constants``)
-        are snapshotted from the ambient globals on each call.
+        session's mutable graph (``self.get_graph()``) and its ``units``
+        mapping composes session-registered units over the ambient
+        registry (so ``diff`` / ``compatible_with`` observe
+        session-level unit definitions); the other registries
+        (``dimensions``, ``basis``, ``base_units``, ``basis_graph``,
+        ``contexts``, ``constants``) are snapshotted from the ambient
+        globals on each call.
 
         Constructing fresh on each call keeps the value consistent with
         in-place mutation of the session graph and with future
@@ -203,14 +239,54 @@ class DefaultSessionState:
 
         graph = self.get_graph()
         live = active_system()
+        session_units = self._session_units()
+        units = {**live.units, **session_units} if session_units else live.units
         return UnitSystem(
             basis=live.basis,
-            units=live.units,
+            units=units,
             dimensions=live.dimensions,
             base_units=live.base_units,
             conversion_graph=graph,
             basis_graph=live.basis_graph,
             contexts=getattr(graph, "_contexts", {}),
+            constants=live.constants,
+        )
+
+    def get_base_system(self) -> "UnitSystem":
+        """Build the session's own pre-mutation baseline.
+
+        The same ambient-composed construction as
+        :meth:`get_unit_system`, but rooted on the pristine
+        ``_base_graph`` and with session-registered units excluded from
+        ``units``. Diffing this against :meth:`get_unit_system` isolates
+        exactly the session's mutations: everything ambient (including
+        any operator/bundle composition) appears on both sides and
+        cancels.
+
+        This — not ``active_system()`` — is the correct baseline for
+        ``system(action="diff")`` / ``check_compatibility``: inside a
+        dispatched tool body the active system *is* the session-effective
+        system, so an ambient read makes the diff compare the session
+        against itself.
+        """
+        from ucon import active_system
+        from ucon.system import UnitSystem
+
+        live = active_system()
+        session_names = self._session_units().keys()
+        units = (
+            {n: u for n, u in live.units.items() if n not in session_names}
+            if session_names
+            else live.units
+        )
+        return UnitSystem(
+            basis=live.basis,
+            units=units,
+            dimensions=live.dimensions,
+            base_units=live.base_units,
+            conversion_graph=self._base_graph,
+            basis_graph=live.basis_graph,
+            contexts=getattr(self._base_graph, "_contexts", {}),
             constants=live.constants,
         )
 
