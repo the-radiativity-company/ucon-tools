@@ -237,6 +237,32 @@ class ConvertAspectThreadingTestCase(unittest.TestCase):
         self.assertEqual(result.kind, "beam_length")
         self.assertEqual(result.aspects, ["calibrated"])
 
+    def test_restricted_family_on_wrong_kind_is_not_applicable(self):
+        """A kinded measurement outside the family's applies_to is refused
+        with both the family and the offending kind named."""
+        self.define(kind="quantity_kind", name="beam_length",
+                    dimension="length")
+        self.define(kind="aspect", name="weighting_standard",
+                    applies_to=["dose_equivalent"])
+        self.define(kind="aspect", name="icrp103",
+                    parent="weighting_standard")
+        result = self.convert(2.0, "m", "km", kind="beam_length",
+                              aspects=["icrp103"])
+        self.assertIsInstance(result, self.AspectToolError)
+        self.assertEqual(result.error_type, "aspect_not_applicable")
+        self.assertEqual(result.family, "weighting_standard")
+        self.assertEqual(result.kind, "beam_length")
+
+    def test_restricted_family_on_matching_kind_attaches(self):
+        self.define(kind="aspect", name="weighting_standard",
+                    applies_to=["dose_equivalent"])
+        self.define(kind="aspect", name="icrp103",
+                    parent="weighting_standard")
+        result = self.convert(2.0, "Sv", "mSv", kind="dose_equivalent",
+                              aspects=["icrp103"])
+        self.assertEqual(result.aspects, ["icrp103"])
+        self.assertEqual(result.kind, "dose_equivalent")
+
 
 class ComputeAspectFoldTestCase(unittest.TestCase):
     """Aspects on compute(): the carry rule folds across the factor
@@ -390,6 +416,31 @@ class ValidateResultAspectTestCase(unittest.TestCase):
         result = self.validate_result(
             value=5.0, unit="m", declared_kind="beam_length")
         self.assertIsNone(result.aspect_match)
+
+    def test_aspect_only_call_names_the_requirement(self):
+        """Regression (#47): the kind-less entry path must not steer to the
+        deprecated declare_computation, and must acknowledge the aspects
+        that were passed."""
+        from ucon.tools.mcp.server import KOQError
+
+        result = self.validate_result(
+            value=5.0, unit="m", declared_aspects=["calibrated"])
+        self.assertIsInstance(result, KOQError)
+        self.assertEqual(result.error_type, "no_active_declaration")
+        joined = " ".join(result.hints)
+        self.assertNotIn("declare_computation", joined)
+        self.assertIn("declared_aspects requires declared_kind", joined)
+
+    def test_bare_call_hint_names_declared_kind(self):
+        """Regression (#47): the hint steers to declared_kind, not the
+        deprecated declare_computation."""
+        from ucon.tools.mcp.server import KOQError
+
+        result = self.validate_result(value=5.0, unit="m")
+        self.assertIsInstance(result, KOQError)
+        joined = " ".join(result.hints)
+        self.assertNotIn("declare_computation", joined)
+        self.assertIn("declared_kind", joined)
 
 
 if __name__ == "__main__":

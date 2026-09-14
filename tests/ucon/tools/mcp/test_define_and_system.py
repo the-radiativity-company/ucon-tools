@@ -222,6 +222,108 @@ class TestSystemActions(DefineSystemTestCase):
         self.assertIn("restrict", result["likely_fix"])
 
 
+class TestConsolidatedParity(DefineSystemTestCase):
+    """Pin payload equality between consolidated and legacy tools.
+
+    The legacy bodies are inlined into define/system at v1.0.0
+    (ucon-tools#49); these tests guarantee the consolidation preserves
+    byte-level payloads until then, and catch drift after.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from ucon.tools.mcp.server import (
+            define_unit,
+            define_conversion,
+            define_constant,
+            define_quantity_kind,
+            extend_basis,
+            restrict_system,
+            diff_systems,
+            check_compatibility,
+        )
+        cls.define_unit = staticmethod(define_unit)
+        cls.define_conversion = staticmethod(define_conversion)
+        cls.define_constant = staticmethod(define_constant)
+        cls.define_quantity_kind = staticmethod(define_quantity_kind)
+        cls.extend_basis = staticmethod(extend_basis)
+        cls.restrict_system = staticmethod(restrict_system)
+        cls.diff_systems = staticmethod(diff_systems)
+        cls.check_compatibility = staticmethod(check_compatibility)
+
+    def test_unit_payload_parity(self):
+        consolidated = self.define(
+            kind="unit", name="parityunit", dimension="length", aliases=["pu"]
+        )
+        self.reset_session()
+        legacy = self.define_unit(
+            name="parityunit", dimension="length", aliases=["pu"]
+        )
+        self.assertEqual(consolidated.model_dump(), legacy.model_dump())
+
+    def test_conversion_payload_parity(self):
+        self.define(kind="unit", name="paritysrc", dimension="length")
+        consolidated = self.define(
+            kind="conversion", src="paritysrc", dst="m", factor=2.0
+        )
+        self.reset_session()
+        self.define(kind="unit", name="paritysrc", dimension="length")
+        legacy = self.define_conversion(src="paritysrc", dst="m", factor=2.0)
+        self.assertEqual(consolidated.model_dump(), legacy.model_dump())
+
+    def test_constant_payload_parity(self):
+        consolidated = self.define(
+            kind="constant", symbol="par_c", name="parity constant",
+            value=1.5, unit="m/s",
+        )
+        self.reset_session()
+        legacy = self.define_constant(
+            symbol="par_c", name="parity constant", value=1.5, unit="m/s"
+        )
+        self.assertEqual(consolidated.model_dump(), legacy.model_dump())
+
+    def test_quantity_kind_payload_parity(self):
+        consolidated = self.define(
+            kind="quantity_kind", name="parity_kind", dimension="length"
+        )
+        self.reset_session()
+        legacy = self.define_quantity_kind(
+            name="parity_kind", dimension="length"
+        )
+        self.assertEqual(consolidated.model_dump(), legacy.model_dump())
+
+    def test_basis_payload_parity(self):
+        components = [
+            {"name": "thermal", "symbol": "Φ", "description": "marker"}
+        ]
+        consolidated = self.define(
+            kind="basis", name="parity_basis",
+            additional_components=components,
+        )
+        self.reset_session()
+        legacy = self.extend_basis(
+            name="parity_basis", additional_components=components
+        )
+        self.assertEqual(consolidated.model_dump(), legacy.model_dump())
+
+    def test_restrict_payload_parity(self):
+        consolidated = self.system(action="restrict", dimensions=["length"])
+        legacy = self.restrict_system(dimensions=["length"])
+        self.assertEqual(consolidated, legacy)
+
+    def test_diff_payload_parity(self):
+        self.define(kind="unit", name="paritydiff", dimension="length")
+        consolidated = self.system(action="diff")
+        legacy = self.diff_systems()
+        self.assertEqual(consolidated, legacy)
+
+    def test_check_compatibility_payload_parity(self):
+        consolidated = self.system(action="check_compatibility")
+        legacy = self.check_compatibility()
+        self.assertEqual(consolidated, legacy)
+
+
 class TestConstituentDeprecations(unittest.TestCase):
     """Every legacy constituent's docstring opens with a deprecation line."""
 
