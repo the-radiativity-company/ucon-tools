@@ -4423,14 +4423,17 @@ def validate_result(
         # Use active declaration
         active = session.get_active_computation()
         if active is None:
+            hints = ["Pass declared_kind=... to name the expected kind"]
+            if declared_aspects is not None:
+                hints.append(
+                    "declared_aspects requires declared_kind; aspect-only "
+                    "validation is not supported"
+                )
             return KOQError(
                 error="No active computation declaration",
                 error_type="no_active_declaration",
                 parameter=None,
-                hints=[
-                    "Use declare_computation() before validate_result()",
-                    "Or specify declared_kind parameter",
-                ],
+                hints=hints,
             )
         kind_name = active.quantity_kind
         try:
