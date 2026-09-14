@@ -32,6 +32,10 @@ help:
 	@echo "  ${CYAN}venv${RESET}              - Create virtual environment"
 	@echo "  ${CYAN}clean${RESET}             - Remove build artifacts and caches"
 	@echo ""
+	@echo "${YELLOW}Release Commands:${RESET}\n"
+	@echo "  ${CYAN}release${RESET}           - Cut VERSION's CHANGELOG section and commit (run before tagging)"
+	@echo "  ${CYAN}changelog-check${RESET}   - Verify VERSION has a non-empty CHANGELOG section"
+	@echo ""
 	@echo "${YELLOW}MCP Server Commands:${RESET}\n"
 	@echo "  ${CYAN}mcp-server${RESET}        - Start MCP server (foreground)"
 	@echo "  ${CYAN}mcp-server-bg${RESET}     - Start MCP server (background)"
@@ -175,6 +179,28 @@ build: ${UV_INSTALLED}
 	@echo "${GREEN}Building distributions...${RESET}"
 	@uv build
 	@echo "${CYAN}Distributions at dist/${RESET}"
+
+# --- Release ---
+# Tagging publishes to PyPI and cuts a GitHub Release whose notes are
+# extracted from the CHANGELOG section matching the tag. Promote before
+# tagging, or the release ships with empty notes; `publish.yaml` runs
+# `changelog-check` on the tag to catch that.
+.PHONY: release
+release:
+	@test -n "${VERSION}" || { echo "${YELLOW}Usage: make release VERSION=x.y.z${RESET}"; exit 1; }
+	@python3 scripts/changelog.py promote ${VERSION}
+	@git add CHANGELOG.md
+	@git commit -m "cuts the ${VERSION} changelog section"
+	@echo ""
+	@echo "${GREEN}Committed the ${VERSION} changelog section.${RESET} Still to do:"
+	@echo "  ${CYAN}1.${RESET} land this commit on main (push, or open a PR if main is protected)"
+	@echo "  ${CYAN}2.${RESET} git tag ${VERSION} && git push origin ${VERSION}"
+	@echo "${YELLOW}Tagging is what publishes to PyPI and cuts the GitHub Release.${RESET}"
+
+.PHONY: changelog-check
+changelog-check:
+	@test -n "${VERSION}" || { echo "${YELLOW}Usage: make changelog-check VERSION=x.y.z${RESET}"; exit 1; }
+	@python3 scripts/changelog.py check ${VERSION}
 
 # --- Cleaning ---
 .PHONY: clean
