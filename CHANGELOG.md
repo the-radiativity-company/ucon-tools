@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-13
+
 Adopts ucon 2.2.0: the aspect stratum lands on the consolidated tool
 surface, and session definitions gain D3 namespace qualification.
 
@@ -996,7 +998,8 @@ through an explicit capability-resolution step before invocation.
 - Install via `pip install ucon-tools[mcp]`
 
 <!-- Links -->
-[Unreleased]: https://github.com/withtwoemms/ucon-tools/compare/0.9.1...HEAD
+[Unreleased]: https://github.com/withtwoemms/ucon-tools/compare/0.10.0...HEAD
+[0.10.0]: https://github.com/withtwoemms/ucon-tools/compare/0.9.1...0.10.0
 [0.9.1]: https://github.com/withtwoemms/ucon-tools/compare/0.9.0...0.9.1
 [0.9.0]: https://github.com/withtwoemms/ucon-tools/compare/0.8.0...0.9.0
 [0.6.0]: https://github.com/withtwoemms/ucon-tools/compare/0.5.3...0.6.0
