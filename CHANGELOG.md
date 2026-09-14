@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`validate_result` hints no longer steer to the deprecated
+  `declare_computation`.** (#47) The `no_active_declaration` error now
+  names `declared_kind`, and when the caller passed `declared_aspects`
+  it states the requirement plainly: aspect-only validation is not
+  supported without a declared kind. Whether aspect-only validation
+  *should* be supported remains open on #47.
+
 ## [0.10.0] - 2026-09-13
 
 Adopts ucon 2.2.0: the aspect stratum lands on the consolidated tool
