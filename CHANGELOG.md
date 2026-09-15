@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The v1.0.0 roadmap no longer treats client schema-caching as a
+  release gate.** The claim came from a single observation of a
+  connector serving stale schemas; retested against a live upgrade, the
+  advertised surface converged without a reconnect and a call using a
+  newly added parameter succeeded. The refresh window is real, a
+  permanent stale cache was not reproduced, and the prerequisite was
+  overstated.
+
 ## [0.13.0] - 2026-09-15
 
 Kind reachability: the lattice join becomes observable from the wire, and
