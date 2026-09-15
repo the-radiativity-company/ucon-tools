@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-15
+
+Kind reachability: the lattice join becomes observable from the wire, and
+each validation axis is judged independently.
+
 ### Added
 
 - **`kind` threading through `compute`** (#48). The initial quantity
