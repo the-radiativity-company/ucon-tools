@@ -16,6 +16,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clients cache tool lists, so a reconnect is required after upgrading.
   Follows the layout of the `ucon` repository's roadmap; `CHANGELOG.md`
   remains the source of truth for incremental updates.
+- **`build_server` — the supported entry point for embedding the MCP
+  server.** Accepts a base `ConversionGraph`, a `StartupConfig`, a
+  `BundleCatalog`, a per-call instrumentation hook, and transport
+  settings, returning the configured server. Everything it accepts was
+  previously reachable only by patching `mcp._mcp_server.lifespan`,
+  `mcp._tool_manager.call_tool`, and `mcp.settings`. Exported from
+  `ucon.tools.mcp` alongside `ServerConfig`, `ToolCall`, and
+  `CallHook`.
+- **`ToolCall` / `CallHook`.** A hook is called with
+  `ToolCall(tool, duration_ms, success)` after every invocation.
+  Following the `AuditSink.emit` convention, a hook must not raise:
+  exceptions are caught and logged so instrumentation can never fail a
+  tool call. Reconfiguring swaps the hook rather than nesting another
+  layer.
+
+### Fixed
+
+- **A replaced lifespan can no longer silently disable capability
+  dispatch.** Embedders injecting a custom base graph replaced the
+  lifespan and yielded only `{"session": ...}`, dropping the
+  `"dispatcher"` key; every request then fell back to a default
+  dispatcher with no error, so a deployment could run indefinitely
+  believing it had capability resolution. The graph is now an argument
+  to `build_server`, and the built-in lifespan — which always yields
+  both keys — is never replaced.
 
 ## [0.10.1] - 2026-09-14
 
