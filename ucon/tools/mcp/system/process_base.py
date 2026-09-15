@@ -95,21 +95,18 @@ class ProcessBase:
 
 
 def _discover_registered_tools() -> frozenset[str]:
-    """Names of `@mcp.tool()`-decorated functions on the server's FastMCP.
+    """Names of the tools `create_server` registers.
 
-    Walks the FastMCP tool-manager state. The tool manager's exposed
-    attribute is `_tool_manager` in current `mcp.server.fastmcp`; access
-    via the public listing if the private form moves.
+    Reads the registration list directly rather than introspecting a
+    server instance: the roster is a property of the module's tool
+    definitions, not of any one server, and asking a server for it would
+    reintroduce the singleton coupling that `create_server` removed.
+    Callers that need the roster of a *particular* server pass it to
+    `from_globals(tools=...)`.
     """
-    from ucon.tools.mcp.server import mcp
+    from ucon.tools.mcp.server import _registered_tool_names
 
-    manager = getattr(mcp, "_tool_manager", None)
-    if manager is None:
-        return frozenset()
-    tools_attr = getattr(manager, "_tools", None)
-    if isinstance(tools_attr, dict):
-        return frozenset(tools_attr.keys())
-    return frozenset()
+    return _registered_tool_names()
 
 
 def _discover_registered_formulas() -> frozenset[str]:

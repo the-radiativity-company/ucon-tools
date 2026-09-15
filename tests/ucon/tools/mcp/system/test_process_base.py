@@ -51,15 +51,16 @@ def test_from_globals_populates_fields():
     assert len(pb.formula_tools) > 0
 
 
-def test_from_globals_tools_match_fastmcp_registry():
-    import ucon.tools.mcp.server  # noqa: F401
-    from ucon.tools.mcp.server import mcp
+def test_from_globals_tools_match_registered_roster():
+    from ucon.tools.mcp.server import create_server
 
     pb = ProcessBase.from_globals()
-    # `_tool_manager._tools` is FastMCP's internal map; the discovery helper
-    # walks it. If FastMCP renames the attribute, the helper should be
-    # adjusted; the test asserts the discovery and the registry agree.
-    expected = frozenset(getattr(mcp._tool_manager, "_tools", {}).keys())
+    # Discovery reads the registration list rather than introspecting a
+    # server, so assert it agrees with what a constructed server
+    # actually registers — the property that would break if the two
+    # drifted apart.
+    server = create_server()
+    expected = frozenset(getattr(server._tool_manager, "_tools", {}).keys())
     assert pb.tools == expected
 
 

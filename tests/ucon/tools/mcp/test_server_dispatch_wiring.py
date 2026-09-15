@@ -33,11 +33,12 @@ from ucon.tools.mcp.server import (
     _reset_fallback_dispatcher,
     _reset_startup_config,
     _set_startup_config,
+    _lifespan_for,
     convert,
+    create_server,
     dispatched,
-    lifespan,
-    mcp,
 )
+from ucon.tools.mcp.runtime import ServerConfig
 from ucon.tools.mcp.suggestions import ConversionError
 from ucon.tools.mcp.system import (
     CallerIdentity,
@@ -110,9 +111,17 @@ def test_build_dispatcher_process_base_tools_include_registered_tools():
 # lifespan
 # -----------------------------------------------------------------------------
 
-def _enter_lifespan() -> dict:
+def _enter_lifespan(config: ServerConfig | None = None) -> dict:
+    """Enter a server's lifespan and return the context it yields.
+
+    A lifespan is now built per server from its config, so tests supply
+    one rather than reaching for a module-level context manager.
+    """
+    cfg = config if config is not None else ServerConfig()
+    server = create_server(cfg)
+
     async def _run():
-        async with lifespan(mcp) as ctx_dict:
+        async with _lifespan_for(cfg)(server) as ctx_dict:
             return ctx_dict
     return asyncio.run(_run())
 
@@ -364,11 +373,16 @@ def test_set_startup_config_resets_fallback_dispatcher():
     assert d2.default_identity.tier == "preview"
 
 
-def test_lifespan_dispatcher_honors_active_startup_config():
-    """`lifespan` must consult `_get_startup_config()` at server start.
+def test_lifespan_dispatcher_honors_its_servers_startup_config():
+    """A lifespan honors the config its server was built with.
+
+    Previously this consulted a process-wide global, which meant a
+    profile installed anywhere applied to every server in the process.
+    Config now arrives by closure, so it reaches exactly one server.
     """
-    _set_startup_config(StartupConfig(profile="preview", system="med"))
-    ctx_dict = _enter_lifespan()
+    ctx_dict = _enter_lifespan(
+        ServerConfig(startup=StartupConfig(profile="preview", system="med"))
+    )
     d = ctx_dict["dispatcher"]
     assert d.default_identity.tier == "preview"
     assert d.process_base.catalog == "med"

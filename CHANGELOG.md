@@ -16,20 +16,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clients cache tool lists, so a reconnect is required after upgrading.
   Follows the layout of the `ucon` repository's roadmap; `CHANGELOG.md`
   remains the source of truth for incremental updates.
-- **`build_server` — the supported entry point for embedding the MCP
-  server.** Accepts a base `ConversionGraph`, a `StartupConfig`, a
-  `BundleCatalog`, a per-call instrumentation hook, and transport
-  settings, returning the configured server. Everything it accepts was
-  previously reachable only by patching `mcp._mcp_server.lifespan`,
-  `mcp._tool_manager.call_tool`, and `mcp.settings`. Exported from
-  `ucon.tools.mcp` alongside `ServerConfig`, `ToolCall`, and
-  `CallHook`.
+- **`create_server(config)` — the supported entry point for embedding
+  the MCP server.** Builds a fully configured, *independent* server
+  from a frozen `ServerConfig` (base `ConversionGraph`, `StartupConfig`,
+  `BundleCatalog`, per-call hook, name, transport settings).
+  Everything it accepts was previously reachable only by patching
+  `_mcp_server.lifespan`, `_tool_manager.call_tool`, and `settings`.
+  Two servers in one process now share no session, dispatcher, config,
+  or hook — the precondition for hosting more than one tenant in a
+  process. Exported from `ucon.tools.mcp` with `ServerConfig`,
+  `ServerRuntime`, `ToolCall`, `CallHook`, `build_runtime`, and
+  `use_runtime`.
+- **`ucon.tools.mcp.runtime`.** `ServerRuntime` holds what a call
+  computes in — session, dispatcher, config, and the inline-graph cache
+  — as one per-server value. `runtime_from(ctx)` resolves it, preferring
+  the request context so ambient state can never shadow what a request
+  arrived with; `use_runtime(...)` scopes one for direct (non-served)
+  calls.
 - **`ToolCall` / `CallHook`.** A hook is called with
   `ToolCall(tool, duration_ms, success)` after every invocation.
   Following the `AuditSink.emit` convention, a hook must not raise:
   exceptions are caught and logged so instrumentation can never fail a
   tool call. Reconfiguring swaps the hook rather than nesting another
   layer.
+
+### Changed
+
+- **Module-level server state removed.** Eight mutable globals — the
+  `mcp` singleton, server config, call-hook install flag and holder,
+  fallback session, fallback dispatcher, startup config, and the
+  inline-graph cache — collapse to one `ContextVar` (the seam for
+  ctx-less calls) plus an import-time tool registry. A server that
+  receives its configuration at construction never needs to look
+  anything up later.
+
+### Deprecated
+
+- **The module-level `mcp` server object.** `from ucon.tools.mcp.server
+  import mcp` still resolves, via a lazily built default server, and
+  warns. Call `create_server()` instead. Removed in v1.0.0.
 
 ### Fixed
 
@@ -38,9 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lifespan and yielded only `{"session": ...}`, dropping the
   `"dispatcher"` key; every request then fell back to a default
   dispatcher with no error, so a deployment could run indefinitely
-  believing it had capability resolution. The graph is now an argument
-  to `build_server`, and the built-in lifespan — which always yields
-  both keys — is never replaced.
+  believing it had capability resolution. The graph is now part of
+  `ServerConfig`, and each server's lifespan is built as a closure over
+  that config — so there is no longer a reason *or* a mechanism to
+  replace it.
 
 ## [0.10.1] - 2026-09-14
 

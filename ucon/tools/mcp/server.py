@@ -12,8 +12,9 @@ import json
 import logging
 import re
 import time
+import warnings
 from contextlib import asynccontextmanager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Generator, Literal, TypeVar
 
 from mcp.server.fastmcp import FastMCP, Context
@@ -81,8 +82,21 @@ from ucon.tools.mcp.system import (
     TIER_CONFIGS,
 )
 from ucon.packages import EdgeDef, PackageLoadError, UnitDef
+from ucon.tools.mcp.runtime import (
+    CallHook,
+    ServerConfig,
+    ServerRuntime,
+    ToolCall,
+    build_runtime,
+    current_runtime,
+    runtime_from,
+    set_current_runtime,
+    use_runtime,
+)
 
 logger = logging.getLogger(__name__)
+
+_ToolFnT = TypeVar("_ToolFnT", bound=Callable[..., Any])
 
 
 def _build_dispatcher(
@@ -133,133 +147,53 @@ def _build_dispatcher(
     )
 
 
-@dataclass(frozen=True)
-class ToolCall:
-    """One completed tool invocation, handed to a `CallHook`.
+# -----------------------------------------------------------------------------
+# Tool registration
+#
+# `@tool` replaces `@mcp.tool()`, which bound every tool to one server at
+# import time. The registry is appended to at import and read-only after
+# — the same category of module state as the function definitions
+# themselves, not mutable configuration.
+# -----------------------------------------------------------------------------
 
-    ``duration_ms`` is wall-clock time for the tool body including
-    dispatch; ``success`` is False when the body raised (the exception
-    still propagates to the caller).
-    """
-
-    tool: str
-    duration_ms: float
-    success: bool
+_TOOLS: list[Callable[..., Any]] = []
 
 
-# Called after every tool invocation. Like `AuditSink.emit`, a hook must
-# not raise: exceptions are caught and logged so instrumentation can
-# never fail a tool call.
-CallHook = Callable[[ToolCall], None]
+def tool(fn: _ToolFnT) -> _ToolFnT:
+    """Register `fn` on every server built by `create_server`."""
+    _TOOLS.append(fn)
+    return fn
 
 
-@dataclass(frozen=True)
-class ServerConfig:
-    """Embedder-supplied configuration for the MCP server.
-
-    Attributes
-    ----------
-    base_graph : ConversionGraph | None
-        Base graph for session state — the composition point for
-        deployments that materialize a custom graph (extra unit
-        packages, a restricted system). ``None`` uses ucon's default.
-    startup : StartupConfig | None
-        Startup knobs (profile, system, tier header). ``None`` means
-        `StartupConfig()` defaults.
-    catalog : Any
-        `BundleCatalog` for capability-bundle resolution. ``None``
-        falls back to ``DEFAULT_CATALOG``.
-    call_hook : CallHook | None
-        Invoked after each tool call with a `ToolCall`. Intended for
-        metrics and usage accounting.
-    """
-
-    base_graph: "ConversionGraph | None" = None
-    startup: StartupConfig | None = None
-    catalog: Any = None
-    call_hook: CallHook | None = None
+def _registered_tool_names() -> frozenset[str]:
+    return frozenset(fn.__name__ for fn in _TOOLS)
 
 
-_server_config: ServerConfig = ServerConfig()
+# -----------------------------------------------------------------------------
+# Server construction
+# -----------------------------------------------------------------------------
 
 
-def _get_server_config() -> ServerConfig:
-    """The active `ServerConfig`; defaults preserve stock behavior."""
-    return _server_config
-
-
-@asynccontextmanager
-async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
-    """Server lifespan - creates per-process state shared across tool calls.
-
-    Yields a dict containing:
-    - ``"session"``: a `DefaultSessionState` for per-server mutable session state.
-    - ``"dispatcher"``: the process-wide tier-driven `Dispatcher`.
-
-    Both keys are always present. Embedders that need a custom base
-    graph supply it through `build_server`, rather than replacing this
-    context manager — a replacement that omits ``"dispatcher"`` silently
-    drops every request onto the fallback dispatcher, disabling
-    capability resolution with no error.
-    """
-    cfg = _get_server_config()
-    session = (
-        DefaultSessionState(base_graph=cfg.base_graph)
-        if cfg.base_graph is not None
-        else DefaultSessionState()
-    )
-    yield {
-        "session": session,
-        "dispatcher": _build_dispatcher(
-            cfg.startup if cfg.startup is not None else _get_startup_config(),
-            catalog=cfg.catalog,
-        ),
-    }
-
-
-def build_server(
-    *,
-    base_graph: "ConversionGraph | None" = None,
-    startup: StartupConfig | None = None,
-    catalog: Any = None,
-    call_hook: CallHook | None = None,
-    host: str | None = None,
-    port: int | None = None,
-    transport_security: Any = None,
-) -> FastMCP:
-    """Configure and return the ucon MCP server.
+def create_server(config: ServerConfig | None = None) -> FastMCP:
+    """Build a fully configured, independent MCP server.
 
     The supported entry point for embedding this server in another
     process. Everything it accepts was previously reachable only by
-    patching private attributes (``mcp._mcp_server.lifespan``,
-    ``mcp._tool_manager.call_tool``, ``mcp.settings``) — surfaces that
-    change without notice and, in the case of the lifespan, break
-    capability dispatch silently when replaced.
+    patching private attributes (``_mcp_server.lifespan``,
+    ``_tool_manager.call_tool``, ``settings``) — surfaces that change
+    without notice and, in the lifespan's case, break capability
+    dispatch silently when replaced.
+
+    Each server owns its lifespan, runtime, tool roster, and call hook.
+    Two servers in one process share nothing; building a second does not
+    disturb the first.
 
     Parameters
     ----------
-    base_graph : ConversionGraph, optional
-        Base graph for session state (custom unit packages, a
-        restricted system). Defaults to ucon's default graph.
-    startup : StartupConfig, optional
-        Startup knobs for the server's dispatcher. Falls back to the
-        process-wide config (as set by the CLI), then to
-        `StartupConfig()` defaults. Deliberately *not* written back to
-        the process-wide config: that global also steers the fallback
-        dispatcher used by direct calls, and a profile installed there
-        applies to callers this server never sees.
-    catalog : BundleCatalog, optional
-        Capability-bundle catalog. Defaults to ``DEFAULT_CATALOG``.
-    call_hook : CallHook, optional
-        Called with a `ToolCall` after every tool invocation. Must not
-        raise; exceptions are caught and logged so instrumentation
-        cannot fail a tool call.
-    host, port : optional
-        Bind address for HTTP transports.
-    transport_security : optional
-        ``TransportSecuritySettings`` for the SDK. Relevant when
-        binding beyond localhost behind a trusted proxy, where the
-        SDK's default DNS-rebinding protection would reject requests.
+    config : ServerConfig, optional
+        Base graph, startup knobs, bundle catalog, call hook, name, and
+        transport settings. Defaults to `ServerConfig()`, which
+        reproduces stock behavior.
 
     Returns
     -------
@@ -270,52 +204,67 @@ def build_server(
     -------
     ::
 
-        server = build_server(
+        server = create_server(ServerConfig(
             base_graph=graph,
             call_hook=lambda call: metrics.record(call.tool, call.duration_ms),
             host="0.0.0.0",
             port=8000,
-        )
+        ))
         server.run(transport="streamable-http")
     """
-    global _server_config
-    _server_config = ServerConfig(
-        base_graph=base_graph,
-        startup=startup,
-        catalog=catalog,
-        call_hook=call_hook,
-    )
+    cfg = config if config is not None else ServerConfig()
+    server = FastMCP(cfg.name, lifespan=_lifespan_for(cfg))
 
-    if host is not None:
-        mcp.settings.host = host
-    if port is not None:
-        mcp.settings.port = port
-    if transport_security is not None:
-        mcp.settings.transport_security = transport_security
-    if call_hook is not None:
-        _install_call_hook(call_hook)
+    for fn in _TOOLS:
+        server.add_tool(fn)
 
-    return mcp
+    if cfg.host is not None:
+        server.settings.host = cfg.host
+    if cfg.port is not None:
+        server.settings.port = cfg.port
+    if cfg.transport_security is not None:
+        server.settings.transport_security = cfg.transport_security
+    if cfg.call_hook is not None:
+        _install_call_hook(server, cfg.call_hook)
+
+    return server
 
 
-_call_hook_installed = False
+def _lifespan_for(config: ServerConfig) -> Callable[[FastMCP], Any]:
+    """Build this server's lifespan as a closure over its config.
 
-
-def _install_call_hook(hook: CallHook) -> None:
-    """Wrap the tool manager's dispatch so `hook` sees every call.
-
-    The wrap happens once per process; re-configuring swaps the hook
-    rather than nesting another layer. This is the one place that
-    reaches into the SDK's tool manager — centralized here so the
-    coupling is tested in this repository instead of duplicated,
-    untested, in every embedder.
+    The config arrives by closure rather than by module global, which is
+    what makes the dispatcher-dropping failure unrepresentable: the only
+    reason to replace this context manager was to inject a graph, and
+    that is now an argument.
     """
-    global _call_hook_installed
-    _server_hook_holder["hook"] = hook
-    if _call_hook_installed:
-        return
 
-    manager = getattr(mcp, "_tool_manager", None)
+    @asynccontextmanager
+    async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
+        runtime = build_runtime(config, _registered_tool_names())
+        # "session" and "dispatcher" accompany "runtime" for the existing
+        # accessors; all three come from one object, so they cannot
+        # disagree.
+        yield {
+            "runtime": runtime,
+            "session": runtime.session,
+            "dispatcher": runtime.dispatcher,
+        }
+
+    return lifespan
+
+
+def _install_call_hook(server: FastMCP, hook: CallHook) -> None:
+    """Wrap one server's dispatch so `hook` observes its calls.
+
+    Per-server and applied once at construction, so neither an
+    "installed" flag nor a swappable holder is needed: reconfiguring
+    means building another server. This is the one place that reaches
+    into the SDK's tool manager — centralized here so the coupling is
+    tested in this repository rather than duplicated, untested, in every
+    embedder.
+    """
+    manager = getattr(server, "_tool_manager", None)
     original = getattr(manager, "call_tool", None)
     if manager is None or original is None:  # pragma: no cover - SDK shape guard
         logger.warning(
@@ -334,138 +283,143 @@ def _install_call_hook(hook: CallHook) -> None:
             success = True
             return result
         finally:
-            active = _server_hook_holder.get("hook")
-            if active is not None:
-                call = ToolCall(
-                    tool=name,
-                    duration_ms=(time.monotonic() - started) * 1000,
-                    success=success,
-                )
-                try:
-                    active(call)
-                except Exception:
-                    logger.exception("call_hook raised for tool %r", name)
+            call = ToolCall(
+                tool=name,
+                duration_ms=(time.monotonic() - started) * 1000,
+                success=success,
+            )
+            try:
+                hook(call)
+            except Exception:
+                logger.exception("call_hook raised for tool %r", name)
 
     manager.call_tool = instrumented
-    _call_hook_installed = True
 
 
-_server_hook_holder: dict[str, CallHook | None] = {"hook": None}
+_default_server: FastMCP | None = None
 
 
-mcp = FastMCP("ucon", lifespan=lifespan)
+def default_server() -> FastMCP:
+    """The process's default server, built on first use.
+
+    Exists so tooling that needs *a* server (the console entry point,
+    `ProcessBase` roster introspection) has one without every caller
+    constructing its own. Built once and never reconfigured — a cached
+    default, not mutable configuration.
+    """
+    global _default_server
+    if _default_server is None:
+        _default_server = create_server()
+    return _default_server
+
+
+def __getattr__(name: str) -> Any:
+    """Deprecated module-level `mcp`, for `from ... import mcp`.
+
+    Removed in v1.0.0; call `create_server()` (or `default_server()`)
+    instead.
+    """
+    if name == "mcp":
+        warnings.warn(
+            "Importing the module-level `mcp` server is deprecated; call "
+            "create_server() instead. Removed in v1.0.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return default_server()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # -----------------------------------------------------------------------------
 # Session Graph Management
 # -----------------------------------------------------------------------------
 
-# Cache for inline graph compilation (keyed by hash of definitions)
-_inline_graph_cache: dict[str, ConversionGraph] = {}
+def _from_lifespan(ctx: Context | None, key: str) -> Any | None:
+    """Read `key` out of a request's lifespan context, if present."""
+    if ctx is None or not hasattr(ctx, "request_context"):
+        return None
+    lifespan_ctx = getattr(ctx.request_context, "lifespan_context", None)
+    if not lifespan_ctx:
+        return None
+    return lifespan_ctx.get(key)
 
 
 def _get_session(ctx: Context | None) -> SessionState:
-    """Extract session state from context.
+    """The session for this call.
 
-    Falls back to a default session for direct function calls (testing).
+    Prefers the whole runtime, then a bare ``"session"`` key — contexts
+    built before runtimes existed carry only the latter, and honoring
+    what a request actually provides beats ignoring it.
     """
-    if ctx is not None and hasattr(ctx, 'request_context'):
-        lifespan_ctx = ctx.request_context.lifespan_context
-        if lifespan_ctx and "session" in lifespan_ctx:
-            return lifespan_ctx["session"]
-    # Fallback for direct calls (testing without MCP context)
-    return _get_fallback_session()
-
-
-# Fallback session for testing without MCP context
-_fallback_session: DefaultSessionState | None = None
-
-
-def _get_fallback_session() -> DefaultSessionState:
-    """Get or create fallback session for direct function calls."""
-    global _fallback_session
-    if _fallback_session is None:
-        _fallback_session = DefaultSessionState()
-    return _fallback_session
-
-
-def _reset_fallback_session() -> None:
-    """Reset the fallback session (for testing)."""
-    global _fallback_session
-    if _fallback_session is not None:
-        _fallback_session.reset()
-
-
-# -----------------------------------------------------------------------------
-# Dispatcher access
-# -----------------------------------------------------------------------------
-
-_fallback_dispatcher: Dispatcher | None = None
-_startup_config: StartupConfig | None = None
+    session = _from_lifespan(ctx, "session")
+    if session is not None:
+        return session
+    return runtime_from(ctx).session
 
 
 def _get_dispatcher(ctx: Context | None) -> Dispatcher:
-    """Extract the process-wide `Dispatcher` from request context.
+    """The capability dispatcher for this call. See `_get_session`."""
+    dispatcher = _from_lifespan(ctx, "dispatcher")
+    if dispatcher is not None:
+        return dispatcher
+    return runtime_from(ctx).dispatcher
 
-    Falls back to a lazily constructed dispatcher for direct function
-    calls (testing without an MCP context).
-    """
-    if ctx is not None and hasattr(ctx, "request_context"):
-        lifespan_ctx = ctx.request_context.lifespan_context
-        if lifespan_ctx and "dispatcher" in lifespan_ctx:
-            return lifespan_ctx["dispatcher"]
-    return _get_fallback_dispatcher()
+
+# -----------------------------------------------------------------------------
+# Ctx-less accessors
+#
+# Direct function calls (tests, library use) have no request context, so
+# they resolve through the ContextVar-bound runtime. These are thin
+# helpers over that runtime rather than the module globals they replace:
+# a runtime is rebuilt, never mutated in place.
+# -----------------------------------------------------------------------------
+
+
+def _get_fallback_session() -> SessionState:
+    """The session backing ctx-less calls."""
+    return current_runtime().session
+
+
+def _reset_fallback_session() -> None:
+    """Clear session definitions for ctx-less calls."""
+    current_runtime().session.reset()
 
 
 def _get_fallback_dispatcher() -> Dispatcher:
-    """Get or create the fallback dispatcher for direct function calls.
-
-    Honors the active `StartupConfig` (if any) so direct-call tests and
-    early lifecycle inspection see the same dispatcher the SSE/stdio
-    runtime would build.
-    """
-    global _fallback_dispatcher
-    if _fallback_dispatcher is None:
-        _fallback_dispatcher = _build_dispatcher(_get_startup_config())
-    return _fallback_dispatcher
+    """The dispatcher backing ctx-less calls."""
+    return current_runtime().dispatcher
 
 
 def _reset_fallback_dispatcher() -> None:
-    """Reset the fallback dispatcher (for testing)."""
-    global _fallback_dispatcher
-    _fallback_dispatcher = None
+    """Rebuild the ctx-less runtime, preserving its config."""
+    config = current_runtime().config
+    set_current_runtime(build_runtime(config, _registered_tool_names()))
 
-
-# -----------------------------------------------------------------------------
-# Startup configuration singleton
-# -----------------------------------------------------------------------------
 
 def _get_startup_config() -> StartupConfig | None:
-    """Return the operator-supplied `StartupConfig`, if any.
+    """The `StartupConfig` backing ctx-less calls, if one was supplied.
 
-    `None` indicates no operator overrides have been applied; callers
-    should treat that as equivalent to ``StartupConfig()`` (the v0.4.x
-    defaults).
+    `None` means no overrides — equivalent to `StartupConfig()`.
     """
-    return _startup_config
+    return current_runtime().config.startup
 
 
 def _set_startup_config(config: StartupConfig | None) -> None:
-    """Install the process-wide `StartupConfig`.
+    """Rebuild the ctx-less runtime around `config`.
 
-    Resets the fallback dispatcher so the next direct call rebuilds
-    with the new config. The lifespan-bound dispatcher constructed by
-    `lifespan` reads `_get_startup_config()` at server start, so this
-    setter must run before `mcp.run(...)` to take effect for the
-    transport-bound dispatcher.
+    Affects direct calls only. A served request carries the runtime its
+    server was built with, so this cannot reach into one — which is
+    deliberate: the previous module-global form let a profile installed
+    here silently apply to callers the setter never knew about.
     """
-    global _startup_config
-    _startup_config = config
-    _reset_fallback_dispatcher()
+    current = current_runtime().config
+    set_current_runtime(
+        build_runtime(replace(current, startup=config), _registered_tool_names())
+    )
 
 
 def _reset_startup_config() -> None:
-    """Clear the process-wide `StartupConfig` (testing helper)."""
+    """Clear the ctx-less `StartupConfig` (testing helper)."""
     _set_startup_config(None)
 
 
@@ -583,19 +537,25 @@ def _build_inline_graph(
     custom_units: list[dict] | None,
     custom_edges: list[dict] | None,
     base_graph: ConversionGraph | None = None,
+    cache: dict[str, ConversionGraph] | None = None,
 ) -> tuple[ConversionGraph | None, ConversionError | None]:
     """Build an ephemeral graph with inline definitions.
 
     Returns (graph, None) on success, (None, error) on failure.
-    Uses caching to avoid redundant compilation.
+    ``cache`` memoizes compiled graphs by definition hash; it belongs to
+    the calling runtime, so one server never serves another's
+    compilation. Defaults to the ctx-less runtime's cache.
     """
     if not custom_units and not custom_edges:
         return None, None
 
+    if cache is None:
+        cache = current_runtime().inline_graph_cache
+
     # Check cache
     cache_key = _hash_definitions(custom_units, custom_edges)
-    if cache_key in _inline_graph_cache:
-        return _inline_graph_cache[cache_key], None
+    if cache_key in cache:
+        return cache[cache_key], None
 
     # Build new graph from provided base (or default)
     if base_graph is None:
@@ -653,7 +613,7 @@ def _build_inline_graph(
             )
 
     # Cache the compiled graph
-    _inline_graph_cache[cache_key] = graph
+    cache[cache_key] = graph
     return graph, None
 
 
@@ -920,7 +880,7 @@ def _constant_to_info(const, category: str | None = None) -> ConstantInfo:
 # -----------------------------------------------------------------------------
 
 
-@mcp.tool()
+@tool
 def convert(
     value: float,
     from_unit: str,
@@ -985,7 +945,10 @@ def convert(
         base_graph = eff.unit_system.conversion_graph
 
         # Build inline graph if custom definitions provided
-        inline_graph, err = _build_inline_graph(custom_units, custom_edges, base_graph)
+        inline_graph, err = _build_inline_graph(
+            custom_units, custom_edges, base_graph,
+            cache=runtime_from(ctx).inline_graph_cache,
+        )
         if err:
             return err
 
@@ -1171,7 +1134,7 @@ def _list_units_body(
     return sorted(result, key=lambda u: (u.dimension, u.name))
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("list_units")
 def list_units(
     dimension: str | None = None,
@@ -1214,7 +1177,7 @@ def _list_scales_body() -> list[ScaleInfo]:
     return sorted(result, key=lambda s: -s.factor)
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("list_scales")
 def list_scales(ctx: Context | None = None) -> list[ScaleInfo]:
     """
@@ -1238,7 +1201,7 @@ def list_scales(ctx: Context | None = None) -> list[ScaleInfo]:
     return _list_scales_body()
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("check_dimensions")
 def check_dimensions(
     unit_a: str,
@@ -1279,7 +1242,7 @@ def check_dimensions(
     )
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("compute")
 def compute(
     initial_value: float,
@@ -1419,7 +1382,10 @@ def compute(
     session_graph = session.get_graph()
 
     # Build inline graph if custom definitions provided
-    inline_graph, err = _build_inline_graph(custom_units, custom_edges, session_graph)
+    inline_graph, err = _build_inline_graph(
+        custom_units, custom_edges, session_graph,
+        cache=runtime_from(ctx).inline_graph_cache,
+    )
     if err:
         return err
 
@@ -1809,7 +1775,7 @@ def _list_dimensions_body(ctx: Context | None = None) -> list[str]:
     return sorted(_all_known_dimensions(session).keys())
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("list_dimensions")
 def list_dimensions(ctx: Context | None = None) -> list[str]:
     """
@@ -1868,7 +1834,7 @@ def _list_constants_body(
     return sorted(result, key=lambda c: (c.category, c.symbol))
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("list_constants")
 def list_constants(
     category: str | None = None,
@@ -1896,7 +1862,7 @@ def list_constants(
     return _list_constants_body(category=category, ctx=ctx)
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("define_constant")
 def define_constant(
     symbol: str,
@@ -2016,7 +1982,7 @@ def define_constant(
     )
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("define_unit")
 def define_unit(
     name: str,
@@ -2139,7 +2105,7 @@ def define_unit(
     )
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("define_conversion")
 def define_conversion(
     src: str,
@@ -2330,7 +2296,7 @@ def _define_aspect_body(
     )
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("define")
 def define(
     kind: Literal["unit", "conversion", "constant", "quantity_kind", "basis", "aspect"],
@@ -2470,7 +2436,7 @@ def define(
     )
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("reset_session")
 def reset_session(ctx: Context | None = None) -> SessionResult:
     """
@@ -2497,7 +2463,7 @@ def reset_session(ctx: Context | None = None) -> SessionResult:
 # -----------------------------------------------------------------------------
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("restrict_system")
 def restrict_system(
     dimensions: list[str] | None = None,
@@ -2544,7 +2510,7 @@ def restrict_system(
     }
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("diff_systems")
 def diff_systems(
     ctx: Context | None = None,
@@ -2589,7 +2555,7 @@ def diff_systems(
     }
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("check_compatibility")
 def check_compatibility(
     ctx: Context | None = None,
@@ -2635,7 +2601,7 @@ def check_compatibility(
 _SYSTEM_ACTIONS = ("restrict", "diff", "check_compatibility")
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("system")
 def system(
     action: Literal["restrict", "diff", "check_compatibility"],
@@ -2865,7 +2831,7 @@ def _build_scale_conversion_factor(
         return None
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("decompose")
 def decompose(
     query: str | None = None,
@@ -3680,7 +3646,7 @@ def _compute_bridging_factors(
 # -----------------------------------------------------------------------------
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("list_formulas")
 def list_formulas(ctx: Context | None = None) -> list[FormulaInfoResponse]:
     """
@@ -3784,7 +3750,7 @@ def _simplify_formula_unit(result: Number) -> Number:
     return Number(result.quantity, best, uncertainty=result.uncertainty)
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("call_formula")
 def call_formula(
     name: str,
@@ -4268,7 +4234,7 @@ def _parse_dimension_object(
     return None
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("define_quantity_kind")
 def define_quantity_kind(
     name: str,
@@ -4437,7 +4403,7 @@ def define_quantity_kind(
     )
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("declare_computation")
 def declare_computation(
     quantity_kind: str,
@@ -4563,7 +4529,7 @@ UNIT_KIND_CONVENTIONS: dict[str, str] = {
 }
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("validate_result")
 def validate_result(
     value: float,
@@ -4876,7 +4842,7 @@ def validate_result(
     )
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("list_quantity_kinds")
 def list_quantity_kinds(
     dimension: str | None = None,
@@ -4994,7 +4960,7 @@ def _list_quantity_kinds_body(
     return sorted(result, key=lambda k: (k["source"], k["name"]))
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("list_kind_formulas")
 def list_kind_formulas(
     ctx: Context | None = None,
@@ -5040,7 +5006,7 @@ def _list_kind_formulas_body(ctx: Context | None = None) -> list[dict]:
     return sorted(result, key=lambda f: f["name"])
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("extend_basis")
 def extend_basis(
     name: str,
@@ -5214,7 +5180,7 @@ def extend_basis(
     )
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("list_extended_bases")
 def list_extended_bases(
     ctx: Context | None = None,
@@ -5278,7 +5244,7 @@ _DISCOVER_TOPICS: dict[str, frozenset[str]] = {
 }
 
 
-@mcp.tool()
+@tool
 @_dispatched_tool("discover")
 def discover(
     topic: Literal[
@@ -5493,16 +5459,19 @@ def main():
         system=args.system if args.system is not None else env_config.system,
         tier_header=args.tier_header,
     )
+    # Also bind it for ctx-less calls, so anything invoking tools as
+    # plain functions in this process sees the operator's knobs.
     _set_startup_config(startup)
 
     if args.sse:
-        # Configure SSE settings
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
+        server = create_server(
+            ServerConfig(startup=startup, host=args.host, port=args.port)
+        )
         print(f"Starting ucon MCP server in SSE mode on http://{args.host}:{args.port}/sse")
-        mcp.run(transport="sse")
+        server.run(transport="sse")
     else:
-        mcp.run(transport="stdio")
+        server = create_server(ServerConfig(startup=startup))
+        server.run(transport="stdio")
 
 
 if __name__ == "__main__":
