@@ -94,6 +94,11 @@ class ServerConfig:
         metrics and usage accounting.
     name : str
         Server name advertised over the protocol.
+    version : str | None
+        Version advertised in the ``initialize`` handshake. ``None``
+        reports the installed ``ucon-tools`` version. Without this the
+        SDK reports *its own* version, so a client cannot tell which
+        ucon-tools it is talking to — or whether an upgrade landed.
     host, port : optional
         Bind address for HTTP transports.
     transport_security : Any
@@ -107,6 +112,7 @@ class ServerConfig:
     catalog: Any = None
     call_hook: CallHook | None = None
     name: str = "ucon"
+    version: str | None = None
     host: str | None = None
     port: int | None = None
     transport_security: Any = None

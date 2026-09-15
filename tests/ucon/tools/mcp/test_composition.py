@@ -292,3 +292,39 @@ class TestRuntimeSeam(ServerConstructionTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAdvertisedVersion(ServerConstructionTestCase):
+    """`initialize` must report ucon-tools, not the MCP SDK.
+
+    FastMCP does not forward a version to the low-level server, and the
+    SDK reports its own when none is set. A client was therefore told
+    the SDK version (e.g. "1.27.0") and could not tell which ucon-tools
+    it was talking to — the reason an upgraded instance serving stale
+    cached schemas is undiagnosable from the client side.
+    """
+
+    def test_reports_the_installed_ucon_tools_version(self):
+        from importlib.metadata import version
+
+        server = self.create_server()
+        self.assertEqual(server._mcp_server.version, version("ucon-tools"))
+
+    def test_is_not_the_sdk_version(self):
+        from importlib.metadata import version
+
+        server = self.create_server()
+        self.assertNotEqual(server._mcp_server.version, version("mcp"))
+
+    def test_explicit_version_overrides(self):
+        server = self.create_server(self.ServerConfig(version="9.9.9"))
+        self.assertEqual(server._mcp_server.version, "9.9.9")
+
+    def test_version_reaches_the_initialize_handshake(self):
+        """Guards the SDK's fallback: `server_version=self.version if
+        self.version else pkg_version("mcp")`."""
+        from importlib.metadata import version
+
+        server = self.create_server()
+        opts = server._mcp_server.create_initialization_options()
+        self.assertEqual(opts.server_version, version("ucon-tools"))
