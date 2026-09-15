@@ -137,6 +137,8 @@ All deprecated tools remain functional until v1.0.0 and return identical payload
 
 ## Architecture
 
+The MCP server is embeddable: `create_server(ServerConfig(...))` builds an independent server with your own base unit system, per-call instrumentation, and transport settings — see the [embedding guide](docs/guides/mcp-server/embedding.md).
+
 `ucon-tools` is an interface layer. It does not reimplement dimensional analysis — it delegates to `ucon` for all unit resolution, conversion, and dimensional algebra. What it adds is interface-specific logic: session state, protocol handling, error suggestions, and agent-oriented features like the `decompose` constraint solver and KOQ disambiguation.
 
 ```

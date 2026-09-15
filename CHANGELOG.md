@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process. Exported from `ucon.tools.mcp` with `ServerConfig`,
   `ServerRuntime`, `ToolCall`, `CallHook`, `build_runtime`, and
   `use_runtime`.
+- **Embedding guide** ([`docs/guides/mcp-server/embedding.md`](docs/guides/mcp-server/embedding.md)) — configuration surface, call instrumentation, running several servers in one process, runtimes, and a migration table from the deprecated module-level `mcp`.
 - **`ucon.tools.mcp.runtime`.** `ServerRuntime` holds what a call
   computes in — session, dispatcher, config, and the inline-graph cache
   — as one per-server value. `runtime_from(ctx)` resolves it, preferring
