@@ -131,7 +131,7 @@ ucon-mcp --transport sse    # SSE transport for remote clients
 | `diff_systems` | *Deprecated — use `system(action="diff")`.* Compare the session system against the process-base system |
 | `check_compatibility` | *Deprecated — use `system(action="check_compatibility")`.* Check if the session system composes with the process-base without conflict |
 
-All deprecated tools remain functional through v0.9.x and are scheduled for removal in v1.0.0, leaving a ten-tool surface: `convert`, `compute`, `decompose`, `check_dimensions`, `discover`, `define`, `system`, `call_formula`, `validate_result`, `reset_session`.
+All deprecated tools remain functional until v1.0.0 and return identical payloads to their replacements, leaving a ten-tool surface: `convert`, `compute`, `decompose`, `check_dimensions`, `discover`, `define`, `system`, `call_formula`, `validate_result`, `reset_session`. See [ROADMAP.md](ROADMAP.md) for the migration table and what lands before then.
 
 ---
 

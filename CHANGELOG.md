@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ROADMAP.md`.** Milestone timeline from the first MCP surface through
+  v1.0.0, with per-milestone motivation for the consolidation line, the
+  capability/composition work, kind integrity, and the removal release.
+  Carries the deprecated→replacement migration table and notes that MCP
+  clients cache tool lists, so a reconnect is required after upgrading.
+  Follows the layout of the `ucon` repository's roadmap; `CHANGELOG.md`
+  remains the source of truth for incremental updates.
+
 ## [0.10.1] - 2026-09-14
 
 ### Fixed
