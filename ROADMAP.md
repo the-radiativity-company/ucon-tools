@@ -225,14 +225,24 @@ surface as typed errors.
   runtime machinery is removed.
 - The public API is frozen under semantic versioning.
 
-**Prerequisite outside this repository:**
-MCP clients cache tool lists. Until the deployment platform can tell a
-connected client that the surface changed — or documents that a reconnect is
-required — removal leaves clients advertising tools that no longer exist.
-Schema freshness is enabling infrastructure for this release, not polish.
-v0.12.0 supplies the first half — an endpoint now reports which
-ucon-tools it runs, so staleness is at least detectable. Making a client
-act on that remains outside this repository.
+**On client-side caching:**
+MCP clients cache tool lists, so the obvious worry is that removal leaves
+clients advertising tools that no longer exist. Measured rather than
+assumed: after a deployment rolled instances to v0.13.0, a connected
+client's advertised schema converged on the new surface without any
+reconnect, and a call exercising a newly added parameter succeeded
+end to end. The refresh window is real; a permanent stale cache was not
+observed.
+
+This is therefore **not** treated as a release gate. If a client is found
+that genuinely fails to converge, that changes — and the mitigation is
+the MCP `listChanged` notification, whose effect still depends on the
+client honoring it.
+
+Separately, v0.12.0 made an endpoint report which ucon-tools it runs.
+That is worth having for operators and, eventually, for agents that need
+to recognize they are on an older surface than their instructions
+assume — but it is diagnosis, not a precondition for removal.
 
 ### Migrating before v1.0.0
 
