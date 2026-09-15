@@ -1211,6 +1211,21 @@ Validate that a computed result matches the declared quantity kind.
 Call this after `compute()` to verify dimensional, kind, and semantic consistency.
 Uses the active declaration from `declare_computation()` if `declared_kind` is not specified.
 
+Each axis is judged independently, and an axis that was not asked about
+reports `null`. Declaring a kind without aspects leaves `aspect_match`
+null; passing `declared_aspects` without a kind leaves `declared_kind`,
+`result_kind`, and `kind_match` null while the aspect comparison still
+runs:
+
+```python
+validate_result(value=206.84, unit="kPa",
+                declared_aspects=["gauge"], aspects=["gauge"])
+# → {"passed": true, "declared_kind": null, "kind_match": null,
+#    "aspect_match": true, "explanation": "Aspects checked; no kind declared"}
+```
+
+A call declaring neither remains an error (`no_active_declaration`).
+
 Beyond dimension equality, `validate_result` enforces *kind*: two units can
 share a dimension yet denote physically distinct quantities (Sv vs Gy both
 carry L²·T⁻²). The result's kind is recovered in three layers:

@@ -148,7 +148,7 @@ class ValidationResult(BaseModel):
     passed: bool
     value: float
     unit: str
-    declared_kind: str
+    declared_kind: str | None = None
     actual_dimension: str
     expected_dimension: str
     dimension_match: bool

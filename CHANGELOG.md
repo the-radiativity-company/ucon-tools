@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([ucon#304](https://github.com/withtwoemms/ucon/issues/304), closed as
   not-a-bug after a library-level investigation that one `compute` call
   would now answer).
+- **Aspect-only validation** (#47). `validate_result` accepts
+  `declared_aspects` without a `declared_kind`: the kind axis reports
+  unjudged (`null`), exactly as the aspect axis does when only a kind is
+  declared. Callers no longer have to invent an irrelevant kind to ask
+  an aspect question.
+
+### Changed
+
+- **`ValidationResult.declared_kind` is now nullable.** It reports
+  `null` for an aspect-only validation. Readers that assumed a string
+  should treat it the way they already treat `kind_match` and
+  `aspect_match` — `null` means that axis was not judged.
 
 ## [0.12.0] - 2026-09-15
 
