@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-15
+
+Capability and composition: the MCP server becomes a value you construct
+rather than a module-level singleton you reconfigure.
+
 ### Added
 
 - **`ROADMAP.md`.** Milestone timeline from the first MCP surface through
