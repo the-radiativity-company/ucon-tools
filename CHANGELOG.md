@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `initialize` handshake reports the ucon-tools version.** FastMCP
+  does not forward a version to the low-level server, and the SDK falls
+  back to reporting *its own* — so clients were told the MCP SDK version
+  (e.g. `1.27.0`) and could not tell which ucon-tools an endpoint ran,
+  or whether an upgrade had landed. `ServerConfig.version` overrides it;
+  the default is the installed distribution version.
+
 ## [0.11.0] - 2026-09-15
 
 Capability and composition: the MCP server becomes a value you construct

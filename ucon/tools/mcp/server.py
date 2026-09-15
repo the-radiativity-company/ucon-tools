@@ -215,6 +215,12 @@ def create_server(config: ServerConfig | None = None) -> FastMCP:
     cfg = config if config is not None else ServerConfig()
     server = FastMCP(cfg.name, lifespan=_lifespan_for(cfg))
 
+    # FastMCP does not forward a version to the low-level server, and the
+    # SDK falls back to reporting *its own* version when none is set — so
+    # without this a client is told the MCP SDK version and cannot tell
+    # which ucon-tools it is talking to, or whether an upgrade landed.
+    server._mcp_server.version = cfg.version or _package_version()
+
     for fn in _TOOLS:
         server.add_tool(fn)
 
@@ -294,6 +300,16 @@ def _install_call_hook(server: FastMCP, hook: CallHook) -> None:
                 logger.exception("call_hook raised for tool %r", name)
 
     manager.call_tool = instrumented
+
+
+def _package_version() -> str:
+    """Installed ``ucon-tools`` version, for the initialize handshake."""
+    try:
+        from importlib.metadata import version
+
+        return version("ucon-tools")
+    except Exception:  # pragma: no cover - source checkout without metadata
+        return "unknown"
 
 
 _default_server: FastMCP | None = None

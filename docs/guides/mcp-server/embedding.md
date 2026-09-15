@@ -47,6 +47,7 @@ server.run(transport="streamable-http")
 | `catalog` | `BundleCatalog` for capability bundles. Defaults to `DEFAULT_CATALOG`. |
 | `call_hook` | Called after every tool invocation. See below. |
 | `name` | Server name in the protocol handshake. |
+| `version` | Version reported in the `initialize` handshake. Defaults to the installed `ucon-tools` version — leave it unless you are wrapping the server in your own product and want that identity advertised instead. |
 | `host`, `port` | Bind address for HTTP transports. |
 | `transport_security` | Needed when binding beyond localhost behind a trusted proxy, where the SDK's default DNS-rebinding protection would reject requests. |
 
