@@ -9,9 +9,12 @@
 import functools
 import hashlib
 import json
+import logging
 import re
+import time
 from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, AsyncIterator, Callable, Generator, Literal, TypeVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Generator, Literal, TypeVar
 
 from mcp.server.fastmcp import FastMCP, Context
 from pydantic import BaseModel
@@ -79,8 +82,13 @@ from ucon.tools.mcp.system import (
 )
 from ucon.packages import EdgeDef, PackageLoadError, UnitDef
 
+logger = logging.getLogger(__name__)
 
-def _build_dispatcher(config: StartupConfig | None = None) -> Dispatcher:
+
+def _build_dispatcher(
+    config: StartupConfig | None = None,
+    catalog: Any = None,
+) -> Dispatcher:
     """Construct the process-wide `Dispatcher`.
 
     Snapshots the registered tool roster and formula registry at call
@@ -100,12 +108,19 @@ def _build_dispatcher(config: StartupConfig | None = None) -> Dispatcher:
     - ``config.tier_header`` is currently unused at build time;
       consumed by future transport-level identity extraction.
 
-    When ``config`` is omitted, defaults preserve v0.4.x behavior:
+    An explicit ``catalog`` (a `BundleCatalog`, supplied by embedders
+    through `build_server`) takes precedence over that stamp. With
+    neither, `ProcessBase.from_globals` falls back to
+    ``DEFAULT_CATALOG``.
+
+    When both arguments are omitted, defaults preserve v0.4.x behavior:
     ``StartupConfig()`` → ``"standard"`` profile, ``catalog=None``.
     """
     cfg = config if config is not None else StartupConfig()
     return Dispatcher(
-        process_base=ProcessBase.from_globals(catalog=cfg.system),
+        process_base=ProcessBase.from_globals(
+            catalog=catalog if catalog is not None else cfg.system
+        ),
         operator_state=OperatorState(),
         policies={
             "session": SessionOverlayPolicy(),
@@ -118,6 +133,61 @@ def _build_dispatcher(config: StartupConfig | None = None) -> Dispatcher:
     )
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    """One completed tool invocation, handed to a `CallHook`.
+
+    ``duration_ms`` is wall-clock time for the tool body including
+    dispatch; ``success`` is False when the body raised (the exception
+    still propagates to the caller).
+    """
+
+    tool: str
+    duration_ms: float
+    success: bool
+
+
+# Called after every tool invocation. Like `AuditSink.emit`, a hook must
+# not raise: exceptions are caught and logged so instrumentation can
+# never fail a tool call.
+CallHook = Callable[[ToolCall], None]
+
+
+@dataclass(frozen=True)
+class ServerConfig:
+    """Embedder-supplied configuration for the MCP server.
+
+    Attributes
+    ----------
+    base_graph : ConversionGraph | None
+        Base graph for session state — the composition point for
+        deployments that materialize a custom graph (extra unit
+        packages, a restricted system). ``None`` uses ucon's default.
+    startup : StartupConfig | None
+        Startup knobs (profile, system, tier header). ``None`` means
+        `StartupConfig()` defaults.
+    catalog : Any
+        `BundleCatalog` for capability-bundle resolution. ``None``
+        falls back to ``DEFAULT_CATALOG``.
+    call_hook : CallHook | None
+        Invoked after each tool call with a `ToolCall`. Intended for
+        metrics and usage accounting.
+    """
+
+    base_graph: "ConversionGraph | None" = None
+    startup: StartupConfig | None = None
+    catalog: Any = None
+    call_hook: CallHook | None = None
+
+
+_server_config: ServerConfig = ServerConfig()
+
+
+def _get_server_config() -> ServerConfig:
+    """The active `ServerConfig`; defaults preserve stock behavior."""
+    return _server_config
+
+
 @asynccontextmanager
 async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
     """Server lifespan - creates per-process state shared across tool calls.
@@ -125,11 +195,162 @@ async def lifespan(server: FastMCP) -> AsyncIterator[dict]:
     Yields a dict containing:
     - ``"session"``: a `DefaultSessionState` for per-server mutable session state.
     - ``"dispatcher"``: the process-wide tier-driven `Dispatcher`.
+
+    Both keys are always present. Embedders that need a custom base
+    graph supply it through `build_server`, rather than replacing this
+    context manager — a replacement that omits ``"dispatcher"`` silently
+    drops every request onto the fallback dispatcher, disabling
+    capability resolution with no error.
     """
+    cfg = _get_server_config()
+    session = (
+        DefaultSessionState(base_graph=cfg.base_graph)
+        if cfg.base_graph is not None
+        else DefaultSessionState()
+    )
     yield {
-        "session": DefaultSessionState(),
-        "dispatcher": _build_dispatcher(_get_startup_config()),
+        "session": session,
+        "dispatcher": _build_dispatcher(
+            cfg.startup if cfg.startup is not None else _get_startup_config(),
+            catalog=cfg.catalog,
+        ),
     }
+
+
+def build_server(
+    *,
+    base_graph: "ConversionGraph | None" = None,
+    startup: StartupConfig | None = None,
+    catalog: Any = None,
+    call_hook: CallHook | None = None,
+    host: str | None = None,
+    port: int | None = None,
+    transport_security: Any = None,
+) -> FastMCP:
+    """Configure and return the ucon MCP server.
+
+    The supported entry point for embedding this server in another
+    process. Everything it accepts was previously reachable only by
+    patching private attributes (``mcp._mcp_server.lifespan``,
+    ``mcp._tool_manager.call_tool``, ``mcp.settings``) — surfaces that
+    change without notice and, in the case of the lifespan, break
+    capability dispatch silently when replaced.
+
+    Parameters
+    ----------
+    base_graph : ConversionGraph, optional
+        Base graph for session state (custom unit packages, a
+        restricted system). Defaults to ucon's default graph.
+    startup : StartupConfig, optional
+        Startup knobs for the server's dispatcher. Falls back to the
+        process-wide config (as set by the CLI), then to
+        `StartupConfig()` defaults. Deliberately *not* written back to
+        the process-wide config: that global also steers the fallback
+        dispatcher used by direct calls, and a profile installed there
+        applies to callers this server never sees.
+    catalog : BundleCatalog, optional
+        Capability-bundle catalog. Defaults to ``DEFAULT_CATALOG``.
+    call_hook : CallHook, optional
+        Called with a `ToolCall` after every tool invocation. Must not
+        raise; exceptions are caught and logged so instrumentation
+        cannot fail a tool call.
+    host, port : optional
+        Bind address for HTTP transports.
+    transport_security : optional
+        ``TransportSecuritySettings`` for the SDK. Relevant when
+        binding beyond localhost behind a trusted proxy, where the
+        SDK's default DNS-rebinding protection would reject requests.
+
+    Returns
+    -------
+    FastMCP
+        The configured server. Call ``.run(transport=...)`` on it.
+
+    Example
+    -------
+    ::
+
+        server = build_server(
+            base_graph=graph,
+            call_hook=lambda call: metrics.record(call.tool, call.duration_ms),
+            host="0.0.0.0",
+            port=8000,
+        )
+        server.run(transport="streamable-http")
+    """
+    global _server_config
+    _server_config = ServerConfig(
+        base_graph=base_graph,
+        startup=startup,
+        catalog=catalog,
+        call_hook=call_hook,
+    )
+
+    if host is not None:
+        mcp.settings.host = host
+    if port is not None:
+        mcp.settings.port = port
+    if transport_security is not None:
+        mcp.settings.transport_security = transport_security
+    if call_hook is not None:
+        _install_call_hook(call_hook)
+
+    return mcp
+
+
+_call_hook_installed = False
+
+
+def _install_call_hook(hook: CallHook) -> None:
+    """Wrap the tool manager's dispatch so `hook` sees every call.
+
+    The wrap happens once per process; re-configuring swaps the hook
+    rather than nesting another layer. This is the one place that
+    reaches into the SDK's tool manager — centralized here so the
+    coupling is tested in this repository instead of duplicated,
+    untested, in every embedder.
+    """
+    global _call_hook_installed
+    _server_hook_holder["hook"] = hook
+    if _call_hook_installed:
+        return
+
+    manager = getattr(mcp, "_tool_manager", None)
+    original = getattr(manager, "call_tool", None)
+    if manager is None or original is None:  # pragma: no cover - SDK shape guard
+        logger.warning(
+            "call_hook not installed: the MCP SDK's tool manager has no "
+            "call_tool to wrap; tool metrics will not be reported"
+        )
+        return
+
+    @functools.wraps(original)
+    async def instrumented(*args, **kwargs):
+        name = args[0] if args else kwargs.get("name", "<unknown>")
+        started = time.monotonic()
+        success = False
+        try:
+            result = await original(*args, **kwargs)
+            success = True
+            return result
+        finally:
+            active = _server_hook_holder.get("hook")
+            if active is not None:
+                call = ToolCall(
+                    tool=name,
+                    duration_ms=(time.monotonic() - started) * 1000,
+                    success=success,
+                )
+                try:
+                    active(call)
+                except Exception:
+                    logger.exception("call_hook raised for tool %r", name)
+
+    manager.call_tool = instrumented
+    _call_hook_installed = True
+
+
+_server_hook_holder: dict[str, CallHook | None] = {"hook": None}
 
 
 mcp = FastMCP("ucon", lifespan=lifespan)
