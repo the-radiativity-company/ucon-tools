@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-15
+
+The server identifies itself: `serverInfo` carries the ucon-tools
+version instead of the MCP SDK's.
+
+### Added
+
+- **`ServerConfig.version`.** Completes the `serverInfo` pair — a
+  product embedding this server can advertise its own identity with
+  `create_server(ServerConfig(name="acme-units", version="3.2.0"))`.
+  `name` was already configurable; versioning it was the missing half.
+
 ### Fixed
 
 - **The `initialize` handshake reports the ucon-tools version.** FastMCP

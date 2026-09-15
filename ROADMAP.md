@@ -44,7 +44,9 @@ structural waypoints that connect releases into a coherent trajectory.
 | **v0.10.0** | **Aspect stratum.** Adopts ucon 2.2.0: `define(kind="aspect")`, `discover(topic="aspects")`, aspect threading through `convert`/`compute`, aspect-aware `validate_result`, D3 namespace qualification | Complete |
 | v0.10.1 | Error-hint correction; assay regression gaps pinned (`applies_to` paths, consolidated/legacy payload parity) | Complete |
 | **v0.11.0** | **Capability and composition.** A public composition API for embedders, opt-in capability enforcement, and deprecation of the runtime bundle-activation machinery | In progress |
-| v0.12.0 | **Kind integrity.** Adopts ucon 2.3.0 — kind annotations that cannot outlive their validity, resolved join-policy semantics, `kind` threading on `compute`, aspect-only validation contract | Planned |
+| v0.12.0 | Server identity: `serverInfo` reports the ucon-tools version instead of the MCP SDK's | In progress |
+| **v0.13.0** | **Kind reachability.** `kind` threading on `compute`, making lattice-join behavior observable from the MCP surface for the first time; aspect-only validation contract | Planned |
+| v0.14.0 | **Kind integrity.** Adopts ucon 2.3.0 once `default_kind` lands — kind annotations stop outliving their validity | Planned |
 | **v1.0.0** | **Removal and freeze.** The seventeen deprecated tools come out, legacy bodies inline into `define`/`system`, bundle rosters re-cut, runtime machinery removed, public API frozen under semantic versioning | Planned |
 
 ---
@@ -140,34 +142,70 @@ the four audit-event literals survive to v1.0.0.
 
 ---
 
-## v0.12.0 — Kind Integrity
+## v0.13.0 — Kind Reachability
+
+**Theme:** You cannot verify what you cannot exercise.
+
+**Motivation:**
+No tool on this surface combines two kinds. `compute` threads `aspects`
+but not `kind`, so lattice-join behavior — including whether a
+`join_policy` of `refuse` ever fires — is unobservable from the wire.
+
+That gap has already cost real diagnostic effort. A live-server assay
+reported that root-level `refuse` was unreachable, inferring it from the
+`join_policy` *fields* declared on child kinds because no tool could
+actually perform a join. The inference was wrong: `KindLattice.lca`
+returns the policy declared at the ancestor a join lands on, and the
+refusal fires correctly ([ucon#304](https://github.com/withtwoemms/ucon/issues/304),
+closed as not-a-bug). Confirming that required dropping to the library.
+A tool that performs a join would have answered it from the wire in one
+call.
+
+**Scope:** Thread `kind` through `compute` — initial quantity and
+per-factor, symmetric with `aspects` — folding kinds through the lattice
+join alongside the numeric pipeline, with `JoinRefused` and
+`DisjointKinds` surfacing as typed errors the way `aspect_refused`
+already does
+([#48](https://github.com/the-radiativity-company/ucon-tools/issues/48)).
+Settle whether `validate_result` should accept declared aspects without
+a declared kind
+([#47](https://github.com/the-radiativity-company/ucon-tools/issues/47)).
+
+**Not gated on `ucon`.** The lattice join works today; this release only
+makes it reachable.
+
+**Status:** Planned.
+
+---
+
+## v0.14.0 — Kind Integrity
 
 **Theme:** A kind annotation should be a claim the library can stand behind.
 
 **Motivation:**
-Two defects surfaced by a live-server assay share a root: the kind stratum
-records intent without checking that intent survives the operation.
+A conversion whose target unit falls outside the declared kind preserves
+the kind anyway — `1 Gy` converted to sieverts stays tagged
+`absorbed_dose`, so the result asserts a label it has not earned
+([ucon#303](https://github.com/withtwoemms/ucon/issues/303)). This is
+worse than the known gap where an undecorated conversion is simply
+silent: a missing annotation omits provenance, while a preserved one
+manufactures it, and a downstream consumer has no signal that the label
+is unearned.
 
-A conversion whose target unit falls outside the declared kind currently
-preserves the kind anyway — `1 Gy` converted to sieverts stays tagged
-`absorbed_dose`, so the result asserts a label it has not earned. This is
-worse than the known gap where an undecorated conversion is simply silent: a
-missing annotation omits provenance, while a preserved one manufactures it,
-and a downstream consumer has no signal that the label is unearned.
+The fix is not available to this repository. `ucon` has no unit→kind
+association at all, so nothing can decide that `Sv` lies outside
+`absorbed_dose`; the missing datum is `default_kind`, a declared
+unit-level field arriving in ucon 2.3.0
+([ucon#305](https://github.com/withtwoemms/ucon/issues/305)). One design
+question is still open there — whether arrival at a unit with a
+conflicting `default_kind` re-kinds the result or refuses it. Currency
+wants re-kinding; dose does not, since nothing performed the weighting
+that would make the target kind true.
 
-Separately, `join_policy` does not inherit down the kind lattice. A `refuse`
-declared at a family root never fires, because siblings resolve to their
-lowest common ancestor — which is the root that declared the refusal. Whether
-inheritance is the intended semantics is an open ruling in `ucon`; the answer
-determines whether the planned `default_kind` work is sufficient or merely
-partial. The aspect stratum, notably, *does* inherit.
+**Scope:** Adopt ucon 2.3.0 and surface its refusals through the tool
+surface as typed errors.
 
-**Scope:** Adopt ucon 2.3.0; thread `kind` through `compute` — which also
-makes lattice-join behavior observable from the MCP surface for the first
-time, since no current tool combines two kinds; and settle whether
-`validate_result` should accept declared aspects without a declared kind.
-
-**Status:** Planned. Gated on the ucon-side design ruling.
+**Status:** Planned. Gated on ucon 2.3.0.
 
 ---
 
@@ -192,6 +230,9 @@ MCP clients cache tool lists. Until the deployment platform can tell a
 connected client that the surface changed — or documents that a reconnect is
 required — removal leaves clients advertising tools that no longer exist.
 Schema freshness is enabling infrastructure for this release, not polish.
+v0.12.0 supplies the first half — an endpoint now reports which
+ucon-tools it runs, so staleness is at least detectable. Making a client
+act on that remains outside this repository.
 
 ### Migrating before v1.0.0
 
