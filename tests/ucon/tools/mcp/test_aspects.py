@@ -417,19 +417,48 @@ class ValidateResultAspectTestCase(unittest.TestCase):
             value=5.0, unit="m", declared_kind="beam_length")
         self.assertIsNone(result.aspect_match)
 
-    def test_aspect_only_call_names_the_requirement(self):
-        """Regression (#47): the kind-less entry path must not steer to the
-        deprecated declare_computation, and must acknowledge the aspects
-        that were passed."""
+    def test_aspect_only_validation_is_supported(self):
+        """#47: aspects are judgeable without a declared kind.
+
+        The model already treats axes as independently judgeable —
+        `aspect_match` is None when only a kind is declared. Erroring on
+        the mirror case was the one asymmetry, and it forced callers to
+        invent an irrelevant kind to ask an aspect question.
+        """
+        result = self.validate_result(
+            value=5.0, unit="m",
+            declared_aspects=["calibrated"], aspects=["calibrated"])
+        self.assertTrue(result.passed)
+        self.assertTrue(result.aspect_match)
+        self.assertIsNone(result.declared_kind)
+        self.assertIsNone(result.kind_match)
+
+    def test_aspect_only_mismatch_fails(self):
+        result = self.validate_result(
+            value=5.0, unit="m", declared_aspects=["calibrated"], aspects=[])
+        self.assertFalse(result.passed)
+        self.assertFalse(result.aspect_match)
+        self.assertTrue(
+            any("missing: calibrated" in w for w in result.semantic_warnings))
+
+    def test_aspect_only_explanation_names_no_kind(self):
+        result = self.validate_result(
+            value=5.0, unit="m",
+            declared_aspects=["calibrated"], aspects=["calibrated"])
+        self.assertNotIn("None", result.explanation)
+        self.assertIn("no kind declared", result.explanation)
+
+    def test_bare_call_still_requires_a_declaration(self):
+        """Neither axis asked for: still an error, now naming both ways in."""
         from ucon.tools.mcp.server import KOQError
 
-        result = self.validate_result(
-            value=5.0, unit="m", declared_aspects=["calibrated"])
+        result = self.validate_result(value=5.0, unit="m")
         self.assertIsInstance(result, KOQError)
         self.assertEqual(result.error_type, "no_active_declaration")
         joined = " ".join(result.hints)
         self.assertNotIn("declare_computation", joined)
-        self.assertIn("declared_aspects requires declared_kind", joined)
+        self.assertIn("declared_kind", joined)
+        self.assertIn("declared_aspects", joined)
 
     def test_bare_call_hint_names_declared_kind(self):
         """Regression (#47): the hint steers to declared_kind, not the

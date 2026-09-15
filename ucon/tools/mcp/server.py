@@ -4642,7 +4642,11 @@ def validate_result(
     Args:
         value: The computed numeric value.
         unit: The result unit string.
-        declared_kind: Optional kind to validate against (uses active declaration if None).
+        declared_kind: Optional kind to validate against (uses the active
+            declaration if None). May be omitted entirely when
+            ``declared_aspects`` is given — the kind axis then reports
+            unjudged (``None``), the way the aspect axis does when only a
+            kind is declared.
         declared_aspects: Optional aspect names the result is expected to
             carry — checked the way the declared kind is: a mismatch
             against the actual aspects fails validation.
@@ -4698,21 +4702,28 @@ def validate_result(
             expected_dimension = kind_info.dimension_vector
         else:
             expected_dimension = "unknown"
+    elif declared_aspects is not None:
+        # Aspect-only validation: the kind axis goes unjudged, exactly as
+        # the aspect axis does when only a kind is declared. The call
+        # still carries the unit, so the aspect comparison is complete —
+        # requiring an irrelevant kind to ask an aspect question was the
+        # model's one asymmetry. `expected_dimension` is filled from the
+        # parsed unit below: with no declared kind there is no dimensional
+        # expectation to contradict.
+        kind_name = None
+        expected_dimension = None
     else:
         # Use active declaration
         active = session.get_active_computation()
         if active is None:
-            hints = ["Pass declared_kind=... to name the expected kind"]
-            if declared_aspects is not None:
-                hints.append(
-                    "declared_aspects requires declared_kind; aspect-only "
-                    "validation is not supported"
-                )
             return KOQError(
                 error="No active computation declaration",
                 error_type="no_active_declaration",
                 parameter=None,
-                hints=hints,
+                hints=[
+                    "Pass declared_kind=... to name the expected kind",
+                    "Or pass declared_aspects=... to validate aspects alone",
+                ],
             )
         kind_name = active.quantity_kind
         try:
@@ -4738,6 +4749,10 @@ def validate_result(
         )
 
     actual_dimension = _get_dimension_vector(parsed_unit)
+    if expected_dimension is None:
+        # Aspect-only: no declared kind, so no dimensional expectation
+        # exists to contradict.
+        expected_dimension = actual_dimension
     dimension_match = actual_dimension == expected_dimension
 
     # ── Check semantic consistency if reasoning provided ────────────────
@@ -4867,7 +4882,11 @@ def validate_result(
     else:
         confidence = "high"
         passed = True
-        if kind_match is True:
+        if kind_name is None:
+            # Aspect-only: no kind was declared, so say what was checked
+            # rather than naming a kind that does not exist.
+            explanation = "Aspects checked; no kind declared"
+        elif kind_match is True:
             explanation = f"Result validated as '{kind_name}' (kind verified)"
         else:
             explanation = f"Result validated as '{kind_name}'"
