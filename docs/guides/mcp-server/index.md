@@ -493,6 +493,7 @@ See [`benchmarks/unitsafe/`](https://github.com/withtwoemms/ucon-tools/tree/main
 
 - [Registering Formulas](registering-formulas.md) — Expose dimensionally-typed calculations to agents
 - [Custom Units via MCP](custom-units.md) — Define domain-specific units at runtime
+- [Embedding the MCP Server](embedding.md) — Run the server in your own process with a custom unit system, call instrumentation, or several servers at once
 
 ## Background
 

@@ -3,15 +3,27 @@
 # Install: pip install ucon[mcp]
 # Run: ucon-mcp
 
-from ucon.tools.mcp.server import build_server, main, CallHook, ServerConfig, ToolCall
+from ucon.tools.mcp.runtime import (
+    CallHook,
+    ServerConfig,
+    ServerRuntime,
+    ToolCall,
+    build_runtime,
+    use_runtime,
+)
+from ucon.tools.mcp.server import create_server, default_server, main
 from ucon.tools.mcp.session import DefaultSessionState, SessionState
 
 __all__ = [
-    "build_server",
+    "create_server",
+    "default_server",
     "main",
     "CallHook",
     "ServerConfig",
+    "ServerRuntime",
     "ToolCall",
+    "build_runtime",
+    "use_runtime",
     "DefaultSessionState",
     "SessionState",
 ]

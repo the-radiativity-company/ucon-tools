@@ -102,11 +102,18 @@ run for months believing it has a capability system.
 
 **Scope:**
 
-- **Public composition API.** `build_server(...)` accepts a base graph,
-  startup configuration, bundle catalog, call-instrumentation hook, and
-  transport settings, and returns the configured server. The built-in
-  lifespan always yields both `session` and `dispatcher`, so the failure
-  mode above becomes unreachable by construction.
+- **Public composition API.** `create_server(config)` builds a fully
+  configured, independent server from a frozen `ServerConfig`. Each
+  server owns its lifespan, runtime, tool roster, and call hook, so two
+  in one process share nothing. Config reaches the lifespan by closure
+  rather than module state, which makes the failure mode above
+  unreachable by construction — there is no longer a mechanism an
+  embedder would replace.
+- **No module-level server state.** Eight mutable globals collapse to
+  one `ContextVar` seam for calls that arrive without a request
+  context. Beyond tidiness this is a prerequisite: hosting more than one
+  tenant in a process is impossible while one session is the process's
+  session.
 - **Opt-in enforcement.** Bundles become enforceable without breaking
   existing deployments: an unconfigured server keeps today's behavior.
 - **Deprecations.** The runtime bundle-activation machinery is deprecated

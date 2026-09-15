@@ -1435,15 +1435,25 @@ class TestGraphCaching(unittest.TestCase):
     def setUpClass(cls):
         try:
             from ucon.tools.mcp.server import (
-                convert, _inline_graph_cache, _hash_definitions, _reset_fallback_session
+                convert, _hash_definitions, _reset_fallback_session
             )
+            from ucon.tools.mcp.runtime import current_runtime
             cls.convert = staticmethod(convert)
-            cls._inline_graph_cache = _inline_graph_cache
             cls._hash_definitions = staticmethod(_hash_definitions)
             cls._reset_fallback_session = staticmethod(_reset_fallback_session)
+            cls.current_runtime = staticmethod(current_runtime)
             cls.skip_tests = False
         except ImportError:
             cls.skip_tests = True
+
+    @property
+    def _inline_graph_cache(self):
+        """The cache backing ctx-less calls.
+
+        Resolved per access rather than captured once: the cache belongs
+        to the runtime, and rebuilding the runtime replaces it.
+        """
+        return self.current_runtime().inline_graph_cache
 
     def setUp(self):
         if self.skip_tests:
