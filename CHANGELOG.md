@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`kind` threading through `compute`** (#48). The initial quantity
+  accepts `kind=`, each factor accepts a `"kind"` key, and kinds fold
+  through the lattice join alongside the numeric pipeline — symmetric
+  with how `aspects` already fold. Differing kinds resolve to their
+  lowest common ancestor; a join the ancestor refuses returns a typed
+  `join_refused` error localized to the step, and kinds from disjoint
+  trees return `disjoint_kinds`. `ComputeResult.kind` surfaces the
+  result.
+
+  This is the first tool on the surface that combines two kinds, so
+  lattice-join behavior is observable from the wire for the first time.
+  It was previously inferable only from declared `join_policy` fields —
+  an inference that was drawn and was wrong
+  ([ucon#304](https://github.com/withtwoemms/ucon/issues/304), closed as
+  not-a-bug after a library-level investigation that one `compute` call
+  would now answer).
+
 ## [0.12.0] - 2026-09-15
 
 The server identifies itself: `serverInfo` carries the ucon-tools

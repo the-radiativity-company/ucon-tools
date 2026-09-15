@@ -724,6 +724,7 @@ class ComputeResult(BaseModel):
     dimension: str
     steps: list[ComputeStep]
     aspects: list[str] = []
+    kind: str | None = None
     source_scalable: bool | None = None
     target_scalable: bool | None = None
 
@@ -1268,6 +1269,7 @@ def compute(
     custom_edges: list[dict] | None = None,
     expected_unit: str | None = None,
     aspects: list[str] | None = None,
+    kind: str | None = None,
     include_scalability: bool = False,
     ctx: Context | None = None,
 ) -> ComputeResult | ConversionError | AspectToolError:
@@ -1308,6 +1310,13 @@ def compute(
             will verify the result has the correct dimension and return diagnostic
             feedback if not. This enables convergence loops where a model can
             iterate on the factor chain until dimensions match.
+        kind: Optional quantity-kind name for the initial quantity.
+            Per-factor kinds are given as a ``"kind"`` key on the factor.
+            Kinds fold through the lattice join: differing kinds resolve
+            to their lowest common ancestor, or return a typed
+            ``join_refused`` error when that ancestor declares
+            ``join_policy="refuse"``. Kinds from disjoint trees return
+            ``disjoint_kinds``.
         aspects: Optional aspect names on the initial quantity
             (declare with define(kind="aspect")). The final aspect set
             is surfaced on the result.
@@ -1458,6 +1467,38 @@ def compute(
                 return aspect_err
             running_aspects = resolved_initial
 
+        # Kind folding rides alongside, through the lattice join. Unlike
+        # aspects — which resolve family-wise and may carry partially —
+        # a kind is the noun: two operands with different kinds join to
+        # their lowest common ancestor, or refuse if that ancestor says
+        # so. This is the only tool that combines two kinds, and so the
+        # only place the join is reachable from the wire.
+        _lattice = None
+
+        def _resolve_kind_name(name, where):
+            nonlocal _lattice
+            if _lattice is None:
+                _lattice = _get_session(ctx).get_kind_lattice()
+            try:
+                return _lattice.get(name), None
+            except KindNotFound:
+                return None, ConversionError(
+                    error=f"Unknown kind: '{name}' (in {where})",
+                    error_type="unknown_kind",
+                    parameter="kind",
+                    hints=[
+                        'Use discover(topic="quantity_kinds") to see '
+                        "available kinds.",
+                        'Or declare one with define(kind="quantity_kind").',
+                    ],
+                )
+
+        running_kind = None
+        if kind is not None:
+            running_kind, kind_err = _resolve_kind_name(kind, "initial quantity")
+            if kind_err is not None:
+                return kind_err
+
         steps: list[ComputeStep] = []
 
         # Record initial state
@@ -1569,6 +1610,40 @@ def compute(
                             ),
                         )
 
+                # Fold this factor's kind through the lattice join.
+                factor_kind_name = factor.get("kind")
+                if factor_kind_name is not None:
+                    factor_kind, kind_err = _resolve_kind_name(
+                        factor_kind_name, f"factors[{i}]")
+                    if kind_err is not None:
+                        return kind_err
+                    if running_kind is None:
+                        running_kind = factor_kind
+                    else:
+                        try:
+                            running_kind = _lattice.join(
+                                running_kind, factor_kind)
+                        except JoinRefused as exc:
+                            err = build_join_refused_error(exc)
+                            err.error = f"{err.error} (at step {step_num})"
+                            err.step = i
+                            return err
+                        except DisjointKinds as exc:
+                            return ConversionError(
+                                error=f"{exc} (at step {step_num})",
+                                error_type="disjoint_kinds",
+                                parameter=f"factors[{i}].kind",
+                                step=i,
+                                hints=[
+                                    f"{exc.left.name!r} and "
+                                    f"{exc.right.name!r} belong to "
+                                    "different kind trees and share no "
+                                    "common ancestor.",
+                                    "Kinds can only combine within one "
+                                    "tree.",
+                                ],
+                            )
+
             except Exception as e:
                 return ConversionError(
                     error=f"Error applying factor at step {step_num}: {str(e)}",
@@ -1627,6 +1702,7 @@ def compute(
             dimension=final_dim,
             steps=steps,
             aspects=sorted(a.name for a in running_aspects),
+            kind=running_kind.name if running_kind is not None else None,
             source_scalable=(
                 _unit_scalable(initial_parsed) if include_scalability else None
             ),

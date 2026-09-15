@@ -210,6 +210,8 @@ Perform multi-step factor-label calculations with dimensional tracking.
 | `factors` | list[dict] | Yes | Conversion factor chain |
 | `custom_units` | list[dict] | No | Inline unit definitions |
 | `custom_edges` | list[dict] | No | Inline conversion edges |
+| `kind` | string | No | Quantity kind for the initial quantity |
+| `aspects` | list[string] | No | Aspect names on the initial quantity |
 
 **Factor dict schema:**
 
@@ -218,6 +220,27 @@ Perform multi-step factor-label calculations with dimensional tracking.
 | `value` | float | Numeric coefficient (default: 1.0) |
 | `numerator` | string | Numerator unit string |
 | `denominator` | string | Denominator unit string (may include numeric prefix) |
+| `kind` | string | Optional quantity kind carried by this factor |
+| `aspects` | list[string] | Optional aspect names carried by this factor |
+
+### Kind folding
+
+Kinds fold through the lattice join alongside the numeric pipeline.
+Differing kinds resolve to their lowest common ancestor; when that
+ancestor declares `join_policy="refuse"` the call returns a typed
+`join_refused` error naming both kinds and the step. Kinds belonging to
+disjoint trees return `disjoint_kinds`. `ComputeResult.kind` carries the
+resolved kind, or `null` when none was supplied.
+
+```python
+# Siblings under a refusing ancestor are blocked rather than silently unified
+compute(initial_value=1, initial_unit="Gy", kind="absorbed_dose",
+        factors=[{"value": 1, "numerator": "Sv", "denominator": "Gy",
+                  "kind": "dose_equivalent"}])
+# → {"error_type": "join_refused",
+#    "error": "Cannot join kinds 'absorbed_dose' and 'dose_equivalent':
+#              parent 'specific_energy' has join_policy=refuse (at step 1)"}
+```
 
 ### Response Schema
 
