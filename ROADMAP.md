@@ -43,10 +43,11 @@ structural waypoints that connect releases into a coherent trajectory.
 | v0.9.1 | `system(action="diff")` baselines on the pre-mutation system rather than comparing the session against itself | Complete |
 | **v0.10.0** | **Aspect stratum.** Adopts ucon 2.2.0: `define(kind="aspect")`, `discover(topic="aspects")`, aspect threading through `convert`/`compute`, aspect-aware `validate_result`, D3 namespace qualification | Complete |
 | v0.10.1 | Error-hint correction; assay regression gaps pinned (`applies_to` paths, consolidated/legacy payload parity) | Complete |
-| **v0.11.0** | **Capability and composition.** A public composition API for embedders, opt-in capability enforcement, and deprecation of the runtime bundle-activation machinery | In progress |
-| v0.12.0 | Server identity: `serverInfo` reports the ucon-tools version instead of the MCP SDK's | In progress |
-| **v0.13.0** | **Kind reachability.** `kind` threading on `compute`, making lattice-join behavior observable from the MCP surface for the first time; aspect-only validation contract | Planned |
-| v0.14.0 | **Kind integrity.** Adopts ucon 2.3.0 once `default_kind` lands — kind annotations stop outliving their validity | Planned |
+| **v0.11.0** | **Capability and composition.** A public composition API for embedders, opt-in capability enforcement, and deprecation of the runtime bundle-activation machinery | Complete |
+| v0.12.0 | Server identity: `serverInfo` reports the ucon-tools version instead of the MCP SDK's | Complete |
+| **v0.13.0** | **Kind reachability.** `kind` threading on `compute`, making lattice-join behavior observable from the MCP surface for the first time; aspect-only validation contract | Complete |
+| **v0.14.0** | **Kind integrity and the UnitSafe KOQ floor.** `compute` consults the formula registry before the lattice join when a factor declares a kind (today `0.5 Gy × 20 Sv/Gy[radiation_weighting_factor]` is *refused* as `disjoint_kinds` while the unweighted must-fail `2 Gy → Sv` passes as `Sv [absorbed_dose]`); adopts ucon 2.3.0's refusing arrival rule and cluster `default_kind`s as typed errors; `compute`'s placeholder becomes `one`; `expected_unit` canonicalizes; `define(kind="conversion")` warns on same-dimension edges | Planned |
+| **v0.15.0** | **UnitSafe harness.** Closed kind vocabulary in the prompt; one KOQ scorer for both conditions; `validate_result` discriminates within a degeneracy cluster or is renamed; semantic warnings gate `passed`; README claims reconciled to measured results; the 500-problem rerun against ucon 2.3.1 | Planned |
 | **v1.0.0** | **Removal and freeze.** The seventeen deprecated tools come out, legacy bodies inline into `define`/`system`, bundle rosters re-cut, runtime machinery removed, public API frozen under semantic versioning | Planned |
 
 ---
@@ -178,34 +179,106 @@ makes it reachable.
 
 ---
 
-## v0.14.0 — Kind Integrity
+## v0.14.0 — Kind Integrity and the UnitSafe KOQ Floor
 
-**Theme:** A kind annotation should be a claim the library can stand behind.
+**Theme:** A kind annotation should be a claim the library can stand behind,
+and the tool should be able to tell a licensed kind change from an unlicensed
+one.
 
 **Motivation:**
 A conversion whose target unit falls outside the declared kind preserves
 the kind anyway — `1 Gy` converted to sieverts stays tagged
 `absorbed_dose`, so the result asserts a label it has not earned
-([ucon#303](https://github.com/withtwoemms/ucon/issues/303)). This is
-worse than the known gap where an undecorated conversion is simply
-silent: a missing annotation omits provenance, while a preserved one
-manufactures it, and a downstream consumer has no signal that the label
-is unearned.
+([ucon#303](https://github.com/withtwoemms/ucon/issues/303)). Measured end
+to end against the shipped catalog, the problem is wider than preservation.
+`compute` folds a factor's kind through `KindLattice.join` — the `+` rule —
+and never consults the `FormulaRegistry`, so the one shipped formula
+(`absorbed_dose × radiation_weighting_factor → dose_equivalent`) is
+unreachable from the tool:
 
-The fix is not available to this repository. `ucon` has no unit→kind
-association at all, so nothing can decide that `Sv` lies outside
-`absorbed_dose`; the missing datum is `default_kind`, a declared
-unit-level field arriving in ucon 2.3.0
-([ucon#305](https://github.com/withtwoemms/ucon/issues/305)). One design
-question is still open there — whether arrival at a unit with a
-conflicting `default_kind` re-kinds the result or refuses it. Currency
-wants re-kinding; dose does not, since nothing performed the weighting
-that would make the target kind true.
+| call | result |
+|---|---|
+| `0.5 Gy[absorbed_dose] × 20 Sv/Gy[radiation_weighting_factor]` | `disjoint_kinds` — refused |
+| `0.5 Gy[absorbed_dose] × 20 Sv/Gy[dose_equivalent]` | `join_refused` — refused |
+| `0.5 Gy[absorbed_dose] × 20 Sv/Gy` (factor unkinded) | `10 Sv [absorbed_dose]` — mislabeled |
+| `2 Gy[absorbed_dose] × 1 Sv/Gy` (the must-fail) | `2 Sv [absorbed_dose]` — mislabeled, not refused |
+| `convert(2, Gy, Sv, kind=absorbed_dose)` | `2 Sv [absorbed_dose]` — mislabeled |
 
-**Scope:** Adopt ucon 2.3.0 and surface its refusals through the tool
-surface as typed errors.
+The legitimate weighted conversion and the illegitimate direct one come back
+byte-identical; the only input that distinguishes them is refused. This is
+the mechanism behind the March treatment run's 17-of-17 rubber-stamped
+KOQ failures: the tool emits `absorbed_dose` on a sievert result,
+`validate_result` checks that the dimension matches, and it does.
 
-**Status:** Planned. Gated on ucon 2.3.0.
+The fix is split across two repositories and ships together. Neither half
+works alone: the ucon-tools half leaves the unkinded paths mislabeled; the
+ucon half turns the formula path into a hard refusal with no way through.
+
+**Scope (this repository):**
+
+- `compute`: when a factor declares a kind, consult
+  `FormulaRegistry.apply({running_kind, factor_kind})` first and fall back
+  to `lattice.join` only when no formula matches. `×` has had a dispatch
+  table since ucon 1.9; `join` is the `+` rule.
+- Adopt ucon 2.3.0 — the arrival rule's refusing clause (both kinds set,
+  neither an ancestor, no contingent license → refuse;
+  [ucon#322](https://github.com/withtwoemms/ucon/pull/322)) and
+  `default_kind` on every degeneracy cluster — and surface the refusals as
+  typed errors. With both halves landed the three paths above produce three
+  answers: refuse, refuse, `10 Sv [dose_equivalent]`.
+- `compute`'s structural placeholder inserts `one`, not `ea`, once ucon
+  2.3.1 ships a canonical unity ([ucon#307](https://github.com/withtwoemms/ucon/issues/307));
+  `ea` is freed to be a genuine count.
+- `expected_unit` canonicalizes a dimensionally equal result into the
+  expected spelling, or emits an explicit "dimensionally equal, spelling
+  differs" signal.
+- `define(kind="conversion")` warns when source and target share a
+  dimension — closes the factor-1 `Hz → rad/s` bypass (`xdom-020`).
+
+**Scope (ucon, tracked there):** the refusing clause on #322 before merge;
+`[[kinds]]` and `default_kind` for the clusters; `one`; named dimension-one
+units persisting in products; `lumen.base_form`. See ucon's roadmap,
+*The UnitSafe gate*.
+
+**Status:** Planned. Gated on ucon 2.3.0 for the refusals and 2.3.1 for the
+placeholder; the formula-first change in `compute` is not gated and should
+land first.
+
+---
+
+## v0.15.0 — UnitSafe Harness
+
+**Theme:** The gate must measure the tool, not the prompt.
+
+**Motivation:**
+The treatment assessment (`docs/internal/DESIGN_NOTE_unitsafe-treatment-assessment.md`)
+found that treatment KOQ scoring relied on `validation_passed`, which the
+tool returned `true` for every wrong kind it was asked about; that control
+and treatment were scored by different functions; and that the model
+invented kind names outside the benchmark's taxonomy. These are harness
+defects, and they are worth more points than anything in v0.14.0 — but
+only once v0.14.0 makes the tool's refusals real.
+
+**Scope:**
+
+- One KOQ scorer, `koq_matches()` against the canonical taxonomy, for both
+  conditions; `validation_passed` logged, never scored.
+- A closed kind vocabulary supplied in the system prompt; the model selects,
+  it does not define. The vocabulary is the catalog's `[[kinds]]`, which
+  v0.14.0 populates for every cluster — so harness pre-registration
+  (the earlier blockers' item 5) becomes unnecessary.
+- `validate_result` either discriminates within a degeneracy cluster
+  (cluster-aware rationale, contrastive declaration, or a second-pass
+  check) or is renamed to what it does.
+- Semantic warnings gate `passed`, or the runner scores `medium`/`low`
+  confidence as a failure.
+- The system prompt is versioned with the dataset and the tool; the
+  README's headline claims are regenerated from the latest run.
+- The 500-problem rerun against ucon 2.3.1. If 100% does not clear, ship
+  at the measured number with every failure named — a 97% with eleven
+  explained failures is a stronger artifact than a 100% anyone can poke at.
+
+**Status:** Planned. Follows v0.14.0; the rerun waits on ucon 2.3.1.
 
 ---
 
