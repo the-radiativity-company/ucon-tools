@@ -1474,6 +1474,29 @@ def compute(
         # so. This is the only tool that combines two kinds, and so the
         # only place the join is reachable from the wire.
         _lattice = None
+        _kind_formulas = None
+
+        def _fold_kind(current, incoming):
+            """Fold an incoming factor kind into the running kind.
+
+            The formula registry first — ``×`` has had a dispatch table
+            since ucon 1.9 — and the lattice join only when no formula
+            matches. The join is the ``+`` rule; consulting it alone
+            refused the one shipped formula
+            (``absorbed_dose × radiation_weighting_factor → dose_equivalent``)
+            as ``disjoint_kinds`` while passing the unweighted must-fail
+            (#62). ``JoinRefused``/``DisjointKinds`` propagate to the
+            handlers at the call site unchanged.
+            """
+            nonlocal _kind_formulas
+            if _kind_formulas is None:
+                _kind_formulas = _get_session(ctx).get_formula_registry()
+            try:
+                _, out, _ = _kind_formulas.apply(
+                    {"left": current, "right": incoming}, lattice=_lattice)
+                return out
+            except FormulaNotFound:
+                return _lattice.join(current, incoming)
 
         def _resolve_kind_name(name, where):
             nonlocal _lattice
@@ -1610,7 +1633,7 @@ def compute(
                             ),
                         )
 
-                # Fold this factor's kind through the lattice join.
+                # Fold this factor's kind: formula first, lattice join otherwise.
                 factor_kind_name = factor.get("kind")
                 if factor_kind_name is not None:
                     factor_kind, kind_err = _resolve_kind_name(
@@ -1621,7 +1644,7 @@ def compute(
                         running_kind = factor_kind
                     else:
                         try:
-                            running_kind = _lattice.join(
+                            running_kind = _fold_kind(
                                 running_kind, factor_kind)
                         except JoinRefused as exc:
                             err = build_join_refused_error(exc)

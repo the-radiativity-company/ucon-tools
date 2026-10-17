@@ -212,5 +212,56 @@ class TestKindAndAspectsCoexist(ComputeKindTestCase):
         self.assertEqual(result.error_type, "join_refused")
 
 
+
+class TestFormulaFirst(ComputeKindTestCase):
+    """A declared factor kind consults the formula registry before the
+    lattice join (#62). The shipped `radiation_weighting` formula is the
+    fixture: `absorbed_dose × radiation_weighting_factor → dose_equivalent`."""
+
+    def test_the_shipped_formula_fires_before_the_join(self):
+        """Before: `disjoint_kinds` — the two kinds live in different trees,
+        and only the join was consulted. The formula exists for exactly this."""
+        result = self.compute(
+            initial_value=0.5,
+            initial_unit="Gy",
+            factors=[{
+                "value": 20, "numerator": "Sv", "denominator": "Gy",
+                "kind": "radiation_weighting_factor",
+            }],
+            kind="absorbed_dose",
+        )
+        self.assertIsInstance(result, self.ComputeResult, result)
+        self.assertEqual(result.kind, "dose_equivalent")
+        self.assertAlmostEqual(result.quantity, 10.0)
+        self.assertEqual(result.unit, "Sv")
+
+    def test_no_formula_still_falls_through_to_the_join(self):
+        """The refuse root is reached only when no formula matched."""
+        result = self.compute(
+            initial_value=1,
+            initial_unit="Gy",
+            factors=[{
+                "value": 1, "numerator": "Sv", "denominator": "Gy",
+                "kind": "dose_equivalent",
+            }],
+            kind="absorbed_dose",
+        )
+        self.assertIsInstance(result, self.ConversionError)
+        self.assertEqual(result.error_type, "join_refused")
+
+    def test_an_unkinded_factor_still_carries_the_initial_kind(self):
+        """Pinned, not endorsed: the unweighted direct conversion comes back
+        labelled `absorbed_dose` on a sievert result. Refusing it is the ucon
+        half of the KOQ floor — the arrival rule's refusing clause with
+        `default_kind` on the cluster units — not this change."""
+        result = self.compute(
+            initial_value=2,
+            initial_unit="Gy",
+            factors=[{"value": 1, "numerator": "Sv", "denominator": "Gy"}],
+            kind="absorbed_dose",
+        )
+        self.assertIsInstance(result, self.ComputeResult)
+        self.assertEqual(result.kind, "absorbed_dose")
+
 if __name__ == "__main__":
     unittest.main()

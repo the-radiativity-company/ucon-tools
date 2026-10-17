@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`compute` consults the formula registry before the lattice join.** (#62)
+  A factor's declared kind was folded through `KindLattice.join` alone — the
+  `+` rule — so the one shipped formula, `absorbed_dose ×
+  radiation_weighting_factor → dose_equivalent`, was unreachable: the
+  legitimate weighted `0.5 Gy × 20 Sv/Gy` was refused as `disjoint_kinds`
+  while the unweighted must-fail passed mislabeled `absorbed_dose`. The
+  registry is now tried first and the join only on `FormulaNotFound`; the
+  weighted conversion returns `10 Sv [dose_equivalent]`. Refusals the join
+  produces are unchanged. The unweighted path stays mislabeled until ucon's
+  refusing arrival rule and cluster `default_kind`s land (ucon#322, ucon 2.3.0).
+
 ### Changed
 
 - **The roadmap re-sequences around the UnitSafe gate.** v0.14.0 becomes
