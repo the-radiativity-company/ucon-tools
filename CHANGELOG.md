@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The roadmap re-sequences around the UnitSafe gate.** v0.14.0 becomes
+  *Kind integrity and the UnitSafe KOQ floor*: an end-to-end probe showed
+  `compute` consults the lattice join and never the formula registry, so
+  the legitimate weighted `Gy → Sv` is refused while the unweighted
+  must-fail passes mislabeled. A new v0.15.0 carries the harness fixes from
+  the treatment assessment. v0.11.0–v0.13.0 are marked complete.
+
 - **The v1.0.0 roadmap no longer treats client schema-caching as a
   release gate.** The claim came from a single observation of a
   connector serving stale schemas; retested against a live upgrade, the
