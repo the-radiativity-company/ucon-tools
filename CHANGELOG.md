@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The aspect surface tests no longer assume ucon ships no aspect families.**
+  `test_discover_empty_forest`, `test_discover_lists_families_roots_first` and
+  `test_reset_clears_the_forest` asserted a forest of exactly zero, which held
+  only because ucon declared none. ucon 2.4.0 declares `pressure_role` and
+  `pressure_origin` (7 nodes), so those three failed with `7 != 0` and
+  `10 != 3`. They now measure ucon's shipped baseline in `setUp` and assert
+  relative to it, so further families upstream do not break them again.
+  `reset_session` is tested for what it means — session declarations dropped,
+  shipped forest restored — rather than for emptiness.
+
+
 - **`compute` consults the formula registry before the lattice join.** (#62)
   A factor's declared kind was folded through `KindLattice.join` alone — the
   `+` rule — so the one shipped formula, `absorbed_dose ×

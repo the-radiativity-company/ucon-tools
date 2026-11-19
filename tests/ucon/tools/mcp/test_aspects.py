@@ -14,7 +14,10 @@ Contracts:
    by family; the filter is rejected on other topics.
 3. ``namespace`` qualifies declarations per D3 (ucon's
    ``rewrite_namespace``): names, parents, and ``applies_to``.
-4. ``reset_session()`` clears the forest.
+4. ``reset_session()`` clears *session* declarations, restoring the
+   forest ucon ships. That baseline is non-empty as of ucon 2.4.0, which
+   declares the ``pressure_role`` and ``pressure_origin`` families, so
+   these tests are written relative to it rather than to zero.
 """
 
 import unittest
@@ -39,6 +42,11 @@ class AspectSurfaceTestCase(unittest.TestCase):
 
     def setUp(self):
         self.reset_session()
+        # The forest ucon ships, measured rather than hardcoded: ucon may
+        # declare further families without breaking these tests.
+        baseline = self.discover(topic="aspects")
+        self.baseline_count = baseline.count
+        self.baseline_names = {item["name"] for item in baseline.items}
 
     def tearDown(self):
         self.reset_session()
@@ -131,11 +139,19 @@ class AspectSurfaceTestCase(unittest.TestCase):
 
     # ---------- discover ----------
 
-    def test_discover_empty_forest(self):
+    def test_discover_lists_the_shipped_forest(self):
+        """With nothing declared, discover reports exactly ucon's baseline.
+
+        This asserted an empty forest until ucon 2.4.0, which was true only
+        because ucon declared no aspect families. It now ships two, so the
+        contract is "the session adds to the shipped forest", not "the forest
+        starts empty".
+        """
         result = self.discover(topic="aspects")
         self.assertEqual(result.topic, "aspects")
-        self.assertEqual(result.count, 0)
-        self.assertEqual(result.items, [])
+        self.assertEqual(result.count, self.baseline_count)
+        self.assertEqual(
+            {item["name"] for item in result.items}, self.baseline_names)
 
     def test_discover_lists_families_roots_first(self):
         self.define(kind="aspect", name="weighting_standard",
@@ -145,10 +161,11 @@ class AspectSurfaceTestCase(unittest.TestCase):
         self.define(kind="aspect", name="icrp103",
                     parent="weighting_standard")
         result = self.discover(topic="aspects")
-        self.assertEqual(result.count, 3)
-        names = [item["name"] for item in result.items]
+        self.assertEqual(result.count, self.baseline_count + 3)
+        declared = [item["name"] for item in result.items
+                    if item["name"] not in self.baseline_names]
         self.assertEqual(
-            names, ["weighting_standard", "icrp103", "icrp60"])
+            declared, ["weighting_standard", "icrp103", "icrp60"])
         root = result.items[0]
         self.assertTrue(root["is_root"])
         self.assertEqual(root["applies_to"], ["dose_equivalent"])
@@ -169,11 +186,14 @@ class AspectSurfaceTestCase(unittest.TestCase):
 
     # ---------- reset ----------
 
-    def test_reset_clears_the_forest(self):
+    def test_reset_clears_session_declarations(self):
+        """Reset drops what the session declared and restores ucon's forest."""
         self.define(kind="aspect", name="calibrated")
         self.reset_session()
         result = self.discover(topic="aspects")
-        self.assertEqual(result.count, 0)
+        self.assertEqual(result.count, self.baseline_count)
+        self.assertNotIn(
+            "calibrated", {item["name"] for item in result.items})
 
 
 
