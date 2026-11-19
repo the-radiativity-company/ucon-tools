@@ -166,7 +166,9 @@ class AspectSurfaceTestCase(unittest.TestCase):
                     if item["name"] not in self.baseline_names]
         self.assertEqual(
             declared, ["weighting_standard", "icrp103", "icrp60"])
-        root = result.items[0]
+        # By name, not by position: item 0 is now one of ucon's shipped roots.
+        root = next(item for item in result.items
+                    if item["name"] == "weighting_standard")
         self.assertTrue(root["is_root"])
         self.assertEqual(root["applies_to"], ["dose_equivalent"])
         self.assertEqual(root["multiplication_policy"], "carry")
